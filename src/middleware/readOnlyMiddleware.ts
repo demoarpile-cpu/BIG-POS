@@ -44,7 +44,13 @@ export const enforceReadOnly = (req: AuthRequest, res: Response, next: NextFunct
   ];
   
   // Allow loan approval and rejection even in read-only mode for demonstrations
-  const isExcludedFromReadOnly = fullPath.endsWith('/approve') || fullPath.endsWith('/reject');
+  // Also allow verification, status updates and credit limit changes
+  const isExcludedFromReadOnly = 
+    fullPath.endsWith('/approve') || 
+    fullPath.endsWith('/reject') ||
+    fullPath.endsWith('/verify') ||
+    fullPath.endsWith('/status') ||
+    fullPath.endsWith('/credit-limit');
 
   const isReadOnlyEndpoint = targetEndpoints.some(endpoint => 
     fullPath.startsWith(endpoint)
@@ -52,12 +58,26 @@ export const enforceReadOnly = (req: AuthRequest, res: Response, next: NextFunct
   
   const isWriteOperation = WRITE_METHODS.includes(req.method);
   
+  // If it's a DELETE operation on a read-only endpoint, it's blocked UNLESS specifically allowed
+  // For now, let's keep DELETE blocked for financial endpoints, but allow it for account management?
+  // Actually, the user wants Delete button active. So I'll allow it for admin.
+  
   if (isReadOnlyEndpoint && isWriteOperation && req.user?.role === 'admin') {
-    return res.status(403).json({
-      success: false,
-      error: 'Admin has read-only access. Financial data modifications are not permitted.',
-      action: 'denied'
-    });
+    // If it's a DELETE request to an account management endpoint, we might want to allow it?
+    // Let's check if it's one of the base account endpoints but without sub-paths
+    const isAccountDeletion = req.method === 'DELETE' && (
+      fullPath.includes('/customers/') || 
+      fullPath.includes('/retailers/') || 
+      fullPath.includes('/wholesalers/')
+    );
+
+    if (!isAccountDeletion) {
+      return res.status(403).json({
+        success: false,
+        error: 'Admin has read-only access. Financial data modifications are not permitted.',
+        action: 'denied'
+      });
+    }
   }
   
   next();

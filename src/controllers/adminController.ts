@@ -1018,67 +1018,50 @@ export const updateCustomer = async (req: AuthRequest, res: Response) => {
 
 export const updateCustomerStatus = async (req: AuthRequest, res: Response) => {
   try {
-    const { id } = req.params; // ConsumerProfile ID or User ID? 
-    // The frontend passes record.user.id which is the USER ID.
-    // Let's assume the ID passed is the USER ID because customer status is on the User model.
-    // However, consistency suggests we might pass the ConsumerProfile ID and look up the user.
-    // In apiService.ts: api.put(`/admin/customers/${id}/status`, data)
-    // The call in CustomerManagementPage.tsx is updateCustomerStatus(record.user.id, newStatus).
-    // record.user.id IS the User ID.
-    // But RESTfully, /admin/customers/:id Usually implies ConsumerProfile ID.
-    // Let's check updateWholesalerStatus. It takes params.id (WholesalerProfile ID) and finds profile then user.
-    // So for consistency, the frontend SHOULD pass ConsumerProfile ID, and backend looks up User.
-    // BUT current frontend code passes `record.user.id`.
-    // I will support BOTH or check if the ID exists as a ConsumerProfile first.
-    // Actually, to be consistent with getCustomers returning ConsumerProfiles, :id should be ConsumerProfile ID.
-    // I will change the frontend to pass record.id (ConsumerProfile ID) instead of record.user.id.
-    // Backend implementation:
-    const { status } = req.body;
-    // Map status string to boolean if needed, or expect boolean 'isActive'
-    // apiService sends: { status: string } from definition?
-    // apiService definition: updateCustomerStatus: (id: string, data: { status: string })
-    // usage in frontend: await adminApi.updateCustomerStatus(record.user.id, newStatus); 
-    // Wait, newStatus is boolean.
-    // Frontend: const newStatus = !record.user?.isActive; ... updateCustomerStatus(..., newStatus)
-    // apiService expects object? No, logic in apiService: api.put(..., data). 
-    // If I pass boolean as data, it sends request body as boolean? No, must be object.
-    // Frontend usage: adminApi.updateCustomerStatus(record.user.id, newStatus)
-    // API Service: updateCustomerStatus: (id, data) => api.put(..., data)
-    // So frontend is passing a boolean where an object is expected? 
-    // Let's check frontend again.
-    // Frontend: await adminApi.updateCustomerStatus(record.user.id, newStatus);
-    // apiService: updateCustomerStatus: (id: string, data: { status: string }) => ... 
-    // Wait, the interface in apiService says it takes `data: { status: string }` but the implementation just passes `data`.
-    // So if frontend passes a boolean, the body is just `true` or `false`.
-    // I should fix the frontend to pass `{ status: newStatus ? 'active' : 'inactive' }` or `{ isActive: newStatus }`.
-    // And backend should handle it.
+    const { id } = req.params; 
+    const { status, isActive } = req.body;
     
-    // For now, let's look for profile by ID.
-    
-    const profileId = Number(id);
-    let profile = await prisma.consumerProfile.findUnique({ where: { id: profileId } });
-    
-    if (!profile) {
-        // Fallback: maybe it IS a user ID?
-        const user = await prisma.user.findUnique({ where: { id: profileId } });
-        if (!user) return res.status(404).json({ error: 'Customer not found' });
-        
-        // It was a user ID
-        await prisma.user.update({
-            where: { id: profileId },
-            data: { isActive: req.body.isActive ?? (req.body.status === 'active') }
-        });
-    } else {
-        // It was a profile ID
-        await prisma.user.update({
-            where: { id: profile.userId },
-            data: { isActive: req.body.isActive ?? (req.body.status === 'active') }
-        });
+    console.log(`[AdminAPI] updateCustomerStatus - ID: ${id}, isActive: ${isActive}, status: ${status}`);
+
+    // Determine new status
+    let newStatus = false;
+    if (typeof isActive === 'boolean') {
+      newStatus = isActive;
+    } else if (status === 'active') {
+      newStatus = true;
+    } else if (status === 'inactive') {
+      newStatus = false;
     }
 
-    res.json({ success: true, message: 'Customer status updated' });
+    const targetId = Number(id);
+    
+    // Check if it's a profile ID
+    let profile = await prisma.consumerProfile.findUnique({ where: { id: targetId } });
+    
+    if (profile) {
+      console.log(`[AdminAPI] Found ConsumerProfile by ID ${targetId}, updating user ${profile.userId}`);
+      await prisma.user.update({
+        where: { id: profile.userId },
+        data: { isActive: newStatus }
+      });
+    } else {
+      // Check if it's a user ID directly (legacy support)
+      const user = await prisma.user.findUnique({ where: { id: targetId } });
+      if (!user) {
+        console.error(`[AdminAPI] Customer not found for ID ${targetId}`);
+        return res.status(404).json({ error: 'Customer not found' });
+      }
+      
+      console.log(`[AdminAPI] Found User by ID ${targetId}, updating directly`);
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { isActive: newStatus }
+      });
+    }
+
+    res.json({ success: true, message: `Customer account ${newStatus ? 'activated' : 'deactivated'} successfully` });
   } catch (error: any) {
-    console.error('Update Customer Status Error:', error);
+    console.error('[AdminAPI] updateCustomerStatus Error:', error);
     res.status(500).json({ error: error.message });
   }
 };
