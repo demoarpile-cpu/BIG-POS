@@ -75,22 +75,38 @@ export const getRetailers = async (req: AuthRequest, res: Response) => {
         const retailerIdsFromRequests = new Set(approvedRequests.map(req => req.retailer.id));
 
         // Format retailers from LinkRequest
-        const retailersFromRequests = approvedRequests.map(req => ({
+        const retailersFromRequests = await Promise.all(approvedRequests.map(async (req) => ({
             ...req.retailer,
             totalOrders: req.retailer.orders.length,
             totalRevenue: req.retailer.orders.reduce((sum, o) => sum + o.totalAmount, 0),
+            creditPaid: await prisma.walletTransaction.aggregate({
+                where: {
+                    retailerId: req.retailer.id,
+                    type: 'credit_repayment',
+                    status: 'completed'
+                },
+                _sum: { amount: true }
+            }).then(res => res._sum.amount || 0),
             linkMethod: 'request'
-        }));
+        })));
 
         // Format retailers from direct link (exclude duplicates)
-        const retailersFromDirect = directlyLinkedRetailers
+        const retailersFromDirect = await Promise.all(directlyLinkedRetailers
             .filter(r => !retailerIdsFromRequests.has(r.id))
-            .map(r => ({
+            .map(async (r) => ({
                 ...r,
                 totalOrders: r.orders.length,
                 totalRevenue: r.orders.reduce((sum, o) => sum + o.totalAmount, 0),
+                creditPaid: await prisma.walletTransaction.aggregate({
+                    where: {
+                        retailerId: r.id,
+                        type: 'credit_repayment',
+                        status: 'completed'
+                    },
+                    _sum: { amount: true }
+                }).then(res => res._sum.amount || 0),
                 linkMethod: 'direct'
-            }));
+            })));
 
         const allRetailers = [...retailersFromRequests, ...retailersFromDirect];
 
@@ -431,6 +447,15 @@ export const getCreditRequestsWithStats = async (req: AuthRequest, res: Response
         const totalCreditUsed = allCreditData.reduce((sum, c) => sum + c.usedCredit, 0);
         const creditAvailable = allCreditData.reduce((sum, c) => sum + c.availableCredit, 0);
 
+        const totalCreditPaid = await prisma.walletTransaction.aggregate({
+            where: {
+                retailerId: { in: allCreditData.map(c => c.retailerId) },
+                type: 'credit_repayment',
+                status: 'completed'
+            },
+            _sum: { amount: true }
+        }).then(res => res._sum.amount || 0);
+
         console.log(`✅ Found ${requests.length} credit requests`);
         res.json({
             requests,
@@ -438,7 +463,8 @@ export const getCreditRequestsWithStats = async (req: AuthRequest, res: Response
             stats: {
                 totalCreditExtended,
                 totalCreditUsed,
-                creditAvailable
+                creditAvailable,
+                totalCreditPaid
             }
         });
     } catch (error: any) {

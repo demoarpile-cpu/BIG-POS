@@ -153,6 +153,7 @@ model Order {
   vehiclePlate      String?
   rejectionReason   String?
   cancellationReason String?
+  notes             String?
 
   @@index([retailerId], map: "Order_retailerId_fkey")
   @@index([wholesalerId], map: "Order_wholesalerId_fkey")
@@ -215,6 +216,7 @@ model Sale {
   vehiclePlate    String?
   rejectionReason String?
   cancellationReason String?
+  notes             String?
 
   @@index([branchId], map: "Sale_branchId_fkey")
   @@index([consumerId], map: "Sale_consumerId_fkey")
@@ -458,6 +460,7 @@ model CustomerOrder {
   vehiclePlate    String?
   rejectionReason String?
   cancellationReason String?
+  notes             String?
 
   @@index([consumerId], map: "CustomerOrder_consumerId_fkey")
   @@map("customerorder")

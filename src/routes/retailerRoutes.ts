@@ -24,6 +24,7 @@ import {
   getCreditOrder,
   requestCredit,
   makeRepayment,
+  payCredit,
   getProfile,
   updateProfile,
   topUpWallet,
@@ -39,6 +40,7 @@ import {
   rejectCustomerLinkRequest,
   getLinkedCustomers,
   unlinkCustomer,
+  linkCardForCustomer,
   // Settlement Invoices (Read-only)
   getSettlementInvoices,
   getSettlementInvoice,
@@ -77,6 +79,7 @@ router.get('/credit', getCreditInfo);
 router.get('/credit/orders', getCreditOrders);
 router.get('/credit/orders/:id', getCreditOrder);
 router.post('/credit/request', requestCredit);
+router.post('/credit/pay', payCredit);
 router.post('/credit/orders/:id/repay', makeRepayment);
 
 // Profile Routes
@@ -107,6 +110,7 @@ router.post('/customer-link-requests/:requestId/approve', approveCustomerLinkReq
 router.post('/customer-link-requests/:requestId/reject', rejectCustomerLinkRequest);
 router.get('/linked-customers', getLinkedCustomers);
 router.delete('/linked-customers/:customerId', unlinkCustomer);
+router.post('/linked-customers/link-card', linkCardForCustomer);
 
 // Settlement Invoices (Read-only - Admin assigns these)
 router.get('/settlement-invoices', getSettlementInvoices);

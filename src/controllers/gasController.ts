@@ -3,6 +3,21 @@ import { AuthRequest } from '../middleware/authMiddleware';
 import prisma from '../utils/prisma';
 import PipingMeterService from '../services/pipingMeter.service';
 
+// Get gas configuration (price, etc)
+export const getGasConfig = async (req: AuthRequest, res: Response) => {
+    try {
+        const gasPrice = Number(process.env.GAS_PRICE_PER_M3) || 1500;
+        res.json({
+            success: true,
+            data: {
+                price_per_m3: gasPrice
+            }
+        });
+    } catch (error: any) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+};
+
 // Lookup meter info (auto-fill)
 export const lookupMeter = async (req: AuthRequest, res: Response) => {
     try {

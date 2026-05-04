@@ -7,7 +7,8 @@ import {
     setPrimaryCard,
     updateCardNickname,
     getCardOrders,
-    topUpCard
+    topUpCard,
+    checkCardBalance
 } from '../controllers/nfcController';
 import { authenticate } from '../middleware/authMiddleware';
 
@@ -24,5 +25,8 @@ router.put('/cards/:id/primary', setPrimaryCard);
 router.put('/cards/:id/nickname', updateCardNickname);
 router.get('/cards/:cardId/orders', getCardOrders);
 router.post('/cards/:cardId/topup', topUpCard);
+
+// POS NFC operations
+router.post('/pos/balance', checkCardBalance);
 
 export default router;

@@ -692,7 +692,7 @@ export const getOrder = async (req: AuthRequest, res: Response) => {
 export const updateOrderStatus = async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
-    const { status } = req.body;
+    const { status, notes, rejectionReason, cancellationReason } = req.body;
 
     const currentOrder = await prisma.order.findUnique({ where: { id: Number(id) } });
     if (!currentOrder) return res.status(404).json({ error: 'Order not found' });
@@ -713,9 +713,14 @@ export const updateOrderStatus = async (req: AuthRequest, res: Response) => {
       });
     }
 
+    const updateData: any = { status };
+    if (notes) updateData.notes = notes;
+    if (rejectionReason) updateData.rejectionReason = rejectionReason;
+    if (cancellationReason) updateData.cancellationReason = cancellationReason;
+
     const order = await prisma.order.update({
       where: { id: Number(id) },
-      data: { status }
+      data: updateData
     });
 
     res.json({ success: true, order });

@@ -517,7 +517,7 @@ export const getOrders = async (req: AuthRequest, res: Response) => {
       status: sale.status, // pending, processing, ready, completed, cancelled
       payment_method: sale.paymentMethod,
       payment_status: 'paid', // Assumed paid for now unless credit
-      notes: '',
+      notes: sale.notes || '',
       created_at: sale.createdAt.toISOString(),
       updated_at: sale.updatedAt.toISOString(),
       completed_at: sale.status === 'completed' ? sale.updatedAt.toISOString() : undefined,
@@ -588,7 +588,7 @@ export const getOrder = async (req: AuthRequest, res: Response) => {
       status: sale.status,
       payment_method: sale.paymentMethod,
       payment_status: 'paid',
-      notes: '',
+      notes: sale.notes || '',
       created_at: sale.createdAt.toISOString(),
       updated_at: sale.updatedAt.toISOString(),
       completed_at: sale.status === 'completed' ? sale.updatedAt.toISOString() : undefined,
@@ -804,9 +804,9 @@ export const createSale = async (req: AuthRequest, res: Response) => {
     const result = await prisma.$transaction(async (prisma) => {
       let consumerId = null;
 
-      // --- Handle NFC Payment ---
+      // --- Handle NFC Payment (Unified Dashboard + Credit) ---
       if (payment_method === 'nfc') {
-        const { uid, pin, wallet_type } = payment_details || {};
+        const { uid, pin } = payment_details || {};
         const card = await prisma.nfcCard.findUnique({ where: { uid } });
 
         if (!card) throw new Error('NFC Card not found');
@@ -816,28 +816,63 @@ export const createSale = async (req: AuthRequest, res: Response) => {
 
         consumerId = card.consumerId;
 
-        // Resolve target wallet (dashboard or credit)
-        const targetWalletType = wallet_type === 'credit' ? 'credit_wallet' : 'dashboard_wallet';
-        
-        const wallet = await prisma.wallet.findFirst({
-          where: { consumerId: consumerId, type: targetWalletType }
+        // Get both wallets
+        const wallets = await prisma.wallet.findMany({
+          where: { consumerId: consumerId, type: { in: ['dashboard_wallet', 'credit_wallet'] } }
         });
 
-        if (!wallet || wallet.balance < total) {
-          throw new Error(`Insufficient ${wallet_type || 'dashboard'} wallet balance`);
+        const dashboardWallet = wallets.find(w => w.type === 'dashboard_wallet');
+        const creditWallet = wallets.find(w => w.type === 'credit_wallet');
+        const totalAvailable = (dashboardWallet?.balance || 0) + (creditWallet?.balance || 0);
+
+        if (totalAvailable < total) {
+          throw new Error(`Insufficient combined balance. Available: ${totalAvailable.toLocaleString()} RWF`);
         }
 
-        // Deduct from wallet
-        await prisma.wallet.update({
-          where: { id: wallet.id },
-          data: { balance: { decrement: total } }
-        });
+        let remainingToDeduct = total;
 
-        // Sync legacy ConsumerProfile balance if using dashboard wallet
-        if (targetWalletType === 'dashboard_wallet') {
+        // 1. Deduct from Dashboard Wallet first
+        if (dashboardWallet && dashboardWallet.balance > 0) {
+          const deductFromDashboard = Math.min(dashboardWallet.balance, remainingToDeduct);
+          await prisma.wallet.update({
+            where: { id: dashboardWallet.id },
+            data: { balance: { decrement: deductFromDashboard } }
+          });
+          
+          // Sync legacy balance
           await prisma.consumerProfile.update({
             where: { id: consumerId },
-            data: { walletBalance: { decrement: total } }
+            data: { walletBalance: { decrement: deductFromDashboard } }
+          });
+
+          await prisma.walletTransaction.create({
+            data: {
+              walletId: dashboardWallet.id,
+              type: 'purchase_nfc',
+              amount: -deductFromDashboard,
+              description: `POS purchase via NFC Card (Dashboard part)`,
+              status: 'completed'
+            }
+          });
+
+          remainingToDeduct -= deductFromDashboard;
+        }
+
+        // 2. Deduct remaining from Credit Wallet
+        if (remainingToDeduct > 0 && creditWallet) {
+          await prisma.wallet.update({
+            where: { id: creditWallet.id },
+            data: { balance: { decrement: remainingToDeduct } }
+          });
+
+          await prisma.walletTransaction.create({
+            data: {
+              walletId: creditWallet.id,
+              type: 'purchase_nfc',
+              amount: -remainingToDeduct,
+              description: `POS purchase via NFC Card (Credit part)`,
+              status: 'completed'
+            }
           });
         }
       }
@@ -850,7 +885,7 @@ export const createSale = async (req: AuthRequest, res: Response) => {
         });
 
         if (!consumer) throw new Error('Consumer profile not found for this phone number');
-        
+
         const wallet = await prisma.wallet.findFirst({
           where: { consumerId: consumer.id, type: 'dashboard_wallet' }
         });
@@ -879,7 +914,7 @@ export const createSale = async (req: AuthRequest, res: Response) => {
       let externalRef = null;
       if (payment_method === 'mobile_money' || payment_method === 'momo') {
         if (!customer_phone) throw new Error('Customer phone required for mobile money payment');
-        
+
         const palmKash = (await import('../services/palmKash.service')).default;
         const pmResult = await palmKash.initiatePayment({
           amount: total,
@@ -956,10 +991,6 @@ export const createSale = async (req: AuthRequest, res: Response) => {
 
       const isRewardEligible = ['dashboard_wallet', 'mobile_money', 'wallet'].includes(payment_method);
 
-      // Validation: ID is mandatory for dashboard_wallet, optional for mobile_money
-      if (payment_method === 'dashboard_wallet' && !targetRewardId) {
-        throw new Error('Gas Reward Wallet ID is required for Dashboard Wallet payments to earn rewards.');
-      }
 
       if (isRewardEligible && targetRewardId && consumerId) {
         // Calculate Profit
@@ -977,7 +1008,7 @@ export const createSale = async (req: AuthRequest, res: Response) => {
 
         if (totalProfit > 0) {
           const rewardAmountRWF = totalProfit * 0.12; // 12% of profit
-          const rewardUnits = rewardAmountRWF / 300; 
+          const rewardUnits = rewardAmountRWF / 300;
 
           await prisma.gasReward.create({
             data: {
@@ -1056,8 +1087,8 @@ export const updateSaleStatus = async (req: AuthRequest, res: Response) => {
     // Restriction: Retailer cannot set status to 'delivered' directly easily 
     // unless they are explicitly allowed (client requirement says Customer or Admin)
     if (status === 'delivered' && req.user!.role !== 'admin') {
-      return res.status(403).json({ 
-        error: 'Only customers or administrators can confirm delivery.' 
+      return res.status(403).json({
+        error: 'Only customers or administrators can confirm delivery.'
       });
     }
 
@@ -1074,6 +1105,10 @@ export const updateSaleStatus = async (req: AuthRequest, res: Response) => {
     }
     if (status === 'cancelled' && reason) {
       updateData.rejectionReason = reason;
+    }
+
+    if (notes) {
+      updateData.notes = notes;
     }
 
     const sale = await prisma.sale.update({
@@ -1497,7 +1532,7 @@ export const getWalletTransactions = async (req: AuthRequest, res: Response) => 
       id: `ORD-${o.id}`,
       type: 'debit',
       amount: o.totalAmount,
-      balance_after: 0, 
+      balance_after: 0,
       description: `Inventory Order #${o.id.toString().substring(0, 8).toUpperCase()}`,
       reference: o.id.toString(),
       status: o.status?.toLowerCase() === 'completed' ? 'completed' : o.status?.toLowerCase() === 'pending' ? 'pending' : 'processing',
@@ -1722,35 +1757,35 @@ export const makeRepayment = async (req: AuthRequest, res: Response) => {
     // 2. PalmKash Integration for MoMo
     let externalRef = null;
     if (paymentMethod === 'mobile_money' || paymentMethod === 'momo') {
-        const palmKash = (await import('../services/palmKash.service')).default;
-        const pmResult = await palmKash.initiatePayment({
-            amount: parseFloat(amount),
-            phoneNumber: (retailerProfile as any).user?.phone || req.body.phone || '',
-            referenceId: `RREPAY-${Date.now()}`,
-            description: `Credit Repayment for Order #${id}`
-        });
+      const palmKash = (await import('../services/palmKash.service')).default;
+      const pmResult = await palmKash.initiatePayment({
+        amount: parseFloat(amount),
+        phoneNumber: (retailerProfile as any).user?.phone || req.body.phone || '',
+        referenceId: `RREPAY-${Date.now()}`,
+        description: `Credit Repayment for Order #${id}`
+      });
 
-        if (!pmResult.success) {
-            return res.status(400).json({ success: false, error: pmResult.error });
-        }
-        externalRef = pmResult.transactionId;
+      if (!pmResult.success) {
+        return res.status(400).json({ success: false, error: pmResult.error });
+      }
+      externalRef = pmResult.transactionId;
     }
 
     // 3. Process Payment
     if (paymentMethod === 'wallet') {
-        if (retailerProfile.walletBalance < amount) {
-          return res.status(400).json({ error: 'Insufficient wallet balance' });
-        }
+      if (retailerProfile.walletBalance < amount) {
+        return res.status(400).json({ error: 'Insufficient wallet balance' });
+      }
     }
 
     // Transaction
     await prisma.$transaction(async (prisma) => {
       // Debit Wallet if chosen
       if (paymentMethod === 'wallet') {
-          await prisma.retailerProfile.update({
-            where: { id: retailerProfile.id },
-            data: { walletBalance: { decrement: amount } }
-          });
+        await prisma.retailerProfile.update({
+          where: { id: retailerProfile.id },
+          data: { walletBalance: { decrement: amount } }
+        });
       }
 
       // Update Credit Usage (if this was a credit order)
@@ -1777,6 +1812,88 @@ export const makeRepayment = async (req: AuthRequest, res: Response) => {
     res.json({ success: true, message: 'Repayment successful' });
   } catch (error: any) {
     console.error('Repayment error:', error);
+    res.status(500).json({ error: error.message });
+  }
+};
+
+// Pay General Credit
+export const payCredit = async (req: AuthRequest, res: Response) => {
+  try {
+    const retailerProfile = await prisma.retailerProfile.findUnique({
+      where: { userId: req.user!.id },
+      include: { user: true }
+    });
+
+    if (!retailerProfile) return res.status(404).json({ error: 'Retailer not found' });
+
+    const { amount, paymentMethod = 'wallet', phone } = req.body;
+
+    if (!amount || amount <= 0) {
+      return res.status(400).json({ error: 'Invalid repayment amount' });
+    }
+
+    // 1. PalmKash Integration for MoMo
+    let externalRef = null;
+    if (paymentMethod === 'mobile_money' || paymentMethod === 'momo') {
+      const palmKash = (await import('../services/palmKash.service')).default;
+      const pmResult = await palmKash.initiatePayment({
+        amount: parseFloat(amount),
+        phoneNumber: phone || (retailerProfile as any).user?.phone || '',
+        referenceId: `GCREPAY-${Date.now()}`,
+        description: `General Credit Repayment`
+      });
+
+      if (!pmResult.success) {
+        return res.status(400).json({ success: false, error: pmResult.error });
+      }
+      externalRef = pmResult.transactionId;
+    }
+
+    // 2. Process Payment
+    if (paymentMethod === 'wallet') {
+      if (retailerProfile.walletBalance < amount) {
+        return res.status(400).json({ error: 'Insufficient wallet balance' });
+      }
+    }
+
+    // Transaction
+    await prisma.$transaction(async (tx) => {
+      // Debit Wallet if chosen
+      if (paymentMethod === 'wallet') {
+        await tx.retailerProfile.update({
+          where: { id: retailerProfile.id },
+          data: { walletBalance: { decrement: amount } }
+        });
+      }
+
+      // Update Credit Usage
+      const creditInfo = await tx.retailerCredit.findUnique({ where: { retailerId: retailerProfile.id } });
+      if (creditInfo) {
+        await tx.retailerCredit.update({
+          where: { retailerId: retailerProfile.id },
+          data: {
+            usedCredit: { decrement: amount },
+            availableCredit: { increment: amount }
+          }
+        });
+      }
+
+      // Create a WalletTransaction record for audit
+      await tx.walletTransaction.create({
+        data: {
+          retailerId: retailerProfile.id,
+          type: 'credit_repayment',
+          amount: amount,
+          description: `Credit Repayment via ${paymentMethod}`,
+          reference: externalRef || `REPAY-${Date.now()}`,
+          status: 'completed'
+        }
+      });
+    });
+
+    res.json({ success: true, message: 'Repayment successful' });
+  } catch (error: any) {
+    console.error('General repayment error:', error);
     res.status(500).json({ error: error.message });
   }
 };
@@ -1944,20 +2061,20 @@ export const topUpWallet = async (req: AuthRequest, res: Response) => {
     let transactionRef = `TOPUP-${Date.now()}`; // Correct prefix for webhook
 
     if (source === 'mobile_money' || source === 'momo') {
-        console.log(`📡 [topUpWallet] Initiating PalmKash payment for phone: ${req.body.phone || (retailerProfile as any).user?.phone}`);
-        const palmKash = (await import('../services/palmKash.service')).default;
-        const pmResult = await palmKash.initiatePayment({
-            amount: parseFloat(amount),
-            phoneNumber: req.body.phone || (retailerProfile as any).user?.phone || '',
-            referenceId: transactionRef,
-            description: `Retailer Wallet Topup`
-        });
-        console.log('📥 [topUpWallet] PalmKash result:', pmResult);
+      console.log(`📡 [topUpWallet] Initiating PalmKash payment for phone: ${req.body.phone || (retailerProfile as any).user?.phone}`);
+      const palmKash = (await import('../services/palmKash.service')).default;
+      const pmResult = await palmKash.initiatePayment({
+        amount: parseFloat(amount),
+        phoneNumber: req.body.phone || (retailerProfile as any).user?.phone || '',
+        referenceId: transactionRef,
+        description: `Retailer Wallet Topup`
+      });
+      console.log('📥 [topUpWallet] PalmKash result:', pmResult);
 
-        if (!pmResult.success) {
-            return res.status(400).json({ success: false, error: pmResult.error });
-        }
-        externalRef = pmResult.transactionId;
+      if (!pmResult.success) {
+        return res.status(400).json({ success: false, error: pmResult.error });
+      }
+      externalRef = pmResult.transactionId;
     }
 
     // Create Pending Transaction
@@ -1973,9 +2090,9 @@ export const topUpWallet = async (req: AuthRequest, res: Response) => {
       }
     });
 
-    res.json({ 
-      success: true, 
-      message: 'Payment initiated. Please approve on your phone.', 
+    res.json({
+      success: true,
+      message: 'Payment initiated. Please approve on your phone.',
       transactionId: transactionRef,
       externalRef: externalRef,
       status: 'pending'
@@ -2427,6 +2544,83 @@ export const cancelLinkRequest = async (req: AuthRequest, res: Response) => {
   } catch (error: any) {
     console.error('Error cancelling link request:', error);
     res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+// Link an RFID card to a linked customer
+export const linkCardForCustomer = async (req: AuthRequest, res: Response) => {
+  try {
+    const { customerId, uid, pin, nickname } = req.body;
+    console.log('Linking card request:', { customerId, uid, pin, nickname });
+    
+    if (!customerId || !uid) {
+      return res.status(400).json({ success: false, error: 'Customer ID and Card UID are required' });
+    }
+
+    const retailerProfile = await prisma.retailerProfile.findUnique({
+      where: { userId: req.user!.id }
+    });
+
+    if (!retailerProfile) {
+      return res.status(404).json({ success: false, error: 'Retailer profile not found' });
+    }
+
+    const targetCustomerId = parseInt(customerId.toString());
+
+    // Verify customer is linked to this retailer
+    const link = await prisma.customerLinkRequest.findUnique({
+      where: {
+        customerId_retailerId: {
+          customerId: targetCustomerId,
+          retailerId: retailerProfile.id
+        }
+      }
+    });
+
+    if (!link) {
+      console.log('Link NOT FOUND for:', { targetCustomerId, retailerId: retailerProfile.id });
+      return res.status(403).json({ success: false, error: 'Customer link record not found in database.' });
+    }
+
+    if (link.status !== 'approved') {
+      console.log('Link NOT APPROVED:', { status: link.status });
+      return res.status(403).json({ success: false, error: `Link request is ${link.status}, not approved.` });
+    }
+
+    // Check if card already exists
+    const existingCard = await prisma.nfcCard.findUnique({ where: { uid } });
+    
+    if (existingCard) {
+      if (existingCard.consumerId && existingCard.consumerId !== targetCustomerId) {
+        return res.status(400).json({ success: false, error: 'This card belongs to someone else already.' });
+      }
+      
+      await prisma.nfcCard.update({
+        where: { uid },
+        data: {
+          consumerId: targetCustomerId,
+          pin: pin || existingCard.pin || '1234',
+          cardholderName: nickname || existingCard.cardholderName || 'Linked at Store',
+          status: 'active',
+          updatedAt: new Date()
+        }
+      });
+    } else {
+      await prisma.nfcCard.create({
+        data: {
+          uid,
+          pin: pin || '1234',
+          cardholderName: nickname || 'Linked at Store',
+          consumerId: targetCustomerId,
+          status: 'active'
+        }
+      });
+    }
+
+    res.json({ success: true, message: `RFID Card ${uid} linked successfully!` });
+  } catch (error: any) {
+    console.error('CRITICAL Link Card Error:', error);
+    res.status(500).json({ success: false, error: `Server Error: ${error.message}` });
   }
 };
 
@@ -2900,8 +3094,8 @@ export const confirmPurchaseOrderDelivery = async (req: AuthRequest, res: Respon
     // Only allow confirmation if order is shipped or confirmed (standard flow)
     const allowedStatuses = ['shipped', 'confirmed', 'processing'];
     if (!allowedStatuses.includes(order.status)) {
-      return res.status(400).json({ 
-        error: `Cannot confirm delivery for order in ${order.status} status` 
+      return res.status(400).json({
+        error: `Cannot confirm delivery for order in ${order.status} status`
       });
     }
 
@@ -2936,7 +3130,7 @@ export const confirmPurchaseOrderDelivery = async (req: AuthRequest, res: Respon
           // Update existing stock and ensure it's active
           await tx.product.update({
             where: { id: existingProduct.id },
-            data: { 
+            data: {
               stock: { increment: item.quantity },
               status: 'active'
             }
@@ -2965,10 +3159,10 @@ export const confirmPurchaseOrderDelivery = async (req: AuthRequest, res: Respon
       return updatedOrder;
     }, { timeout: 15000 });
 
-    res.json({ 
-      success: true, 
+    res.json({
+      success: true,
       message: 'Purchase order delivered and inventory updated',
-      order: result 
+      order: result
     });
   } catch (error: any) {
     console.error('❌ Error confirming purchase order delivery:', error);

@@ -654,11 +654,10 @@ export const getMyOrders = async (req: AuthRequest, res: Response) => {
       payment_method: sale.paymentMethod,
       // Optional fields
       packager: undefined,
-      shipper: sale.shipperName ? {
-        name: sale.shipperName,
-        phone: sale.shipperPhone,
-        plate_number: sale.vehiclePlate
-      } : undefined,
+      shipperName: sale.shipperName,
+      shipperPhone: sale.shipperPhone,
+      vehiclePlate: sale.vehiclePlate,
+      notes: sale.notes || '',
       meter_id: sale.meterId,
       rejection_reason: sale.rejectionReason,
       cancellation_reason: sale.cancellationReason
@@ -708,11 +707,10 @@ export const getMyOrders = async (req: AuthRequest, res: Response) => {
         meter_id: items[0]?.meterNumber, // Attempt to grab meter number
         rejection_reason: order.rejectionReason,
         cancellation_reason: order.cancellationReason,
-        shipper: order.shipperName ? {
-          name: order.shipperName,
-          phone: order.shipperPhone,
-          plate_number: order.vehiclePlate
-        } : undefined
+        shipperName: order.shipperName,
+        shipperPhone: order.shipperPhone,
+        vehiclePlate: order.vehiclePlate,
+        notes: order.notes || ''
       };
     });
 

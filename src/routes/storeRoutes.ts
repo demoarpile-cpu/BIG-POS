@@ -50,7 +50,8 @@ import {
   getGasRewardsLeaderboard,
   getOrderDetails,
   recordGasUsage,
-  lookupMeter
+  lookupMeter,
+  getGasConfig
 } from '../controllers/gasController';
 import { authenticate, optionalAuthenticate } from '../middleware/authMiddleware';
 
@@ -80,6 +81,7 @@ router.post('/wallets/refund-request', authenticate, requestRefund);
 router.get('/wallets/transactions', authenticate, getWalletTransactions);
 
 // Protected routes - Gas Service
+router.get('/gas/config', getGasConfig);
 router.get('/gas/meters', authenticate, getGasMeters);
 router.get('/gas/meters/lookup/:meter_number', lookupMeter);
 router.post('/gas/meters', authenticate, addGasMeter);

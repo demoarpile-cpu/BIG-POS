@@ -60,13 +60,17 @@ export const initiateGasMeterRecharge = async (req: AuthRequest, res: Response) 
     
     const gasPrice = Number(process.env.GAS_PRICE_PER_M3) || 1500;
     
-    // Money amount is chosen directly now on the frontend
+    // Calculate total money and total volume
+    // Requirement: "Gas Volume (m3) = Amount (RWF) / Price per m3"
     let totalMoneyAmount = isVendByUnit ? parsedAmount * gasPrice : parsedAmount;
+    let totalVolume = isVendByUnit ? parsedAmount : (parsedAmount / gasPrice);
 
     // ZERO cost for Token Push Mode
     if (isPushToken) {
         totalMoneyAmount = 0;
+        totalVolume = 0;
     }
+
     if (!isPushToken && (isNaN(parsedAmount) || parsedAmount <= 0)) {
         return res.status(400).json({
             success: false,
@@ -74,11 +78,11 @@ export const initiateGasMeterRecharge = async (req: AuthRequest, res: Response) 
         });
     }
 
-    // Minimum recharge check (checks calculated money amount for minimum safeguard)
-    if (!isPushToken && !isVendByUnit && totalMoneyAmount < 500) {
+    // Minimum recharge check (Requirement: 300 RWF minimum)
+    if (!isPushToken && totalMoneyAmount < 300) {
         return res.status(400).json({
             success: false,
-            error: 'Minimum recharge amount is 500 RWF.',
+            error: 'Minimum recharge amount is 300 RWF.',
         });
     }
 
@@ -245,25 +249,22 @@ export const initiateGasMeterRecharge = async (req: AuthRequest, res: Response) 
 
     try {
         if (selectedProvider === 'zhongyi') {
-            console.log(`[GasRecharge] Routing ${meterType} recharge via Zhongyi API`);
+            console.log(`[GasRecharge] Routing ${meterType} recharge via Zhongyi API (Volume: ${totalVolume})`);
             apiResult = await zhongyiMeterService.rechargeMeter({
                 meterNumber,
-                amount: parsedAmount,
+                amount: totalVolume,
                 customerRef,
-                isVendByUnit: !!isVendByUnit,
+                isVendByUnit: true, // Always send as unit/volume per requirement
             });
         } else {
             // Apply Stronpower API (tokenMeterService) for both TOKEN and PIPING/LoRa meters
-            console.log(`[GasRecharge] Routing ${meterType} recharge via Stronpower API (TokenMeterService)`);
+            console.log(`[GasRecharge] Routing ${meterType} recharge via Stronpower API (Volume: ${totalVolume})`);
             apiResult = await tokenMeterService.rechargeTokenMeter({
                 meterNumber,
-                amount: parsedAmount,
+                amount: totalVolume,
                 customerRef,
-                isVendByUnit: !!isVendByUnit
+                isVendByUnit: true // Always send as unit/volume per requirement
             });
-            
-            // Note: Stronpower's tokenMeterService automatically handles Token generation, 
-            // and falls back to VendingMeterDirectly (Direct TopUp) if the meter requires it.
         }
     } catch (apiError: any) {
         await prisma.gasRechargeTransaction.update({
@@ -393,8 +394,6 @@ export const initiateGasMeterRecharge = async (req: AuthRequest, res: Response) 
         // Refund logic...
         if (userId && paymentMethod === 'wallet') {
             try {
-                const gasPrice = Number(process.env.GAS_PRICE_PER_M3) || 1500;
-                const totalMoneyAmount = isVendByUnit ? parsedAmount * gasPrice : parsedAmount;
                 if (!consumerProfileId) return; // Cannot refund if no profile (though unlikely if payment succeeded)
 
                 const wallet = await prisma.wallet.findFirst({

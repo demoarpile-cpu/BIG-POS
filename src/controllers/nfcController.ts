@@ -27,9 +27,13 @@ export const getMyCards = async (req: AuthRequest, res: Response) => {
             where: { consumerId: consumerProfile.id }
         });
 
-        const wallet = await prisma.wallet.findFirst({
-            where: { consumerId: consumerProfile.id, type: 'dashboard_wallet' }
+        const wallets = await prisma.wallet.findMany({
+            where: { consumerId: consumerProfile.id, type: { in: ['dashboard_wallet', 'credit_wallet'] } }
         });
+
+        const dashboardBalance = wallets.find(w => w.type === 'dashboard_wallet')?.balance || 0;
+        const creditBalance = wallets.find(w => w.type === 'credit_wallet')?.balance || 0;
+        const totalBalance = dashboardBalance + creditBalance;
 
         // Transform to frontend expected format
         const formattedCards = cards.map((card, index) => ({
@@ -40,8 +44,10 @@ export const getMyCards = async (req: AuthRequest, res: Response) => {
             is_primary: index === 0, // Assume first card is primary for now
             linked_at: card.createdAt,
             last_used: card.updatedAt,
-            nickname: `NFC Card (${card.uid.slice(-4)})`,
-            balance: wallet?.balance || 0, // Linked backend wallet balance
+            nickname: card.cardholderName || `NFC Card (${card.uid.slice(-4)})`,
+            balance: totalBalance, // Unified Dashboard + Credit balance
+            dashboard_balance: dashboardBalance,
+            credit_balance: creditBalance
         }));
 
         res.json({
@@ -90,7 +96,8 @@ export const linkCard = async (req: AuthRequest, res: Response) => {
                 data: {
                     consumerId: consumerProfile.id,
                     status: 'active',
-                    pin: pin // Update PIN to user's choice
+                    pin: pin, // Update PIN to user's choice
+                    cardholderName: nickname
                 }
             });
             return res.json({
@@ -107,6 +114,7 @@ export const linkCard = async (req: AuthRequest, res: Response) => {
                 uid,
                 pin,
                 consumerId: consumerProfile.id,
+                cardholderName: nickname,
                 status: 'active'
             }
         });
@@ -226,12 +234,38 @@ export const setPrimaryCard = async (req: AuthRequest, res: Response) => {
 // Update Nickname
 export const updateCardNickname = async (req: AuthRequest, res: Response) => {
     try {
-        // Placeholder
+        const userId = req.user!.id;
+        const { cardId } = req.params;
+        const { nickname } = req.body;
+
+        const consumerProfile = await prisma.consumerProfile.findUnique({
+            where: { userId }
+        });
+
+        if (!consumerProfile) {
+            return res.status(404).json({ success: false, error: 'Customer profile not found' });
+        }
+
+        // EV3 UID support: look up by UID or database ID
+        const card = await prisma.nfcCard.findFirst({
+            where: isNaN(Number(cardId)) ? { uid: String(cardId) } : { id: Number(cardId) }
+        });
+
+        if (!card || card.consumerId !== consumerProfile.id) {
+            return res.status(404).json({ success: false, error: 'Card not found' });
+        }
+
+        await prisma.nfcCard.update({
+            where: { id: card.id },
+            data: { cardholderName: nickname }
+        });
+
         res.json({
             success: true,
-            message: 'Nickname updated'
+            message: 'Nickname updated successfully'
         });
     } catch (error: any) {
+        console.error('Update card nickname error:', error);
         res.status(500).json({ success: false, error: error.message });
     }
 };
@@ -311,4 +345,58 @@ export const topUpCard = async (req: AuthRequest, res: Response) => {
         success: false,
         error: 'Direct top-up of NFC cards is disabled. EV3 cards do not store balances; all funds are maintained in your backend wallet.'
     });
+};
+
+// Check Card Balance for POS (Retailer check)
+export const checkCardBalance = async (req: AuthRequest, res: Response) => {
+    try {
+        const { card_uid, pin } = req.body;
+
+        if (!card_uid) {
+            return res.status(400).json({ success: false, error: 'Card UID is required' });
+        }
+
+        const card = await prisma.nfcCard.findUnique({
+            where: { uid: card_uid },
+            include: { consumerProfile: true }
+        });
+
+        if (!card) {
+            return res.status(404).json({ success: false, error: 'NFC Card not found' });
+        }
+
+        if (card.status !== 'active') {
+            return res.status(400).json({ success: false, error: 'NFC Card is not active' });
+        }
+
+        if (pin && card.pin !== pin) {
+            return res.status(401).json({ success: false, error: 'Invalid Card PIN' });
+        }
+
+        if (!card.consumerId) {
+            return res.status(400).json({ success: false, error: 'Card is not linked to any customer' });
+        }
+
+        const wallets = await prisma.wallet.findMany({
+            where: { consumerId: card.consumerId, type: { in: ['dashboard_wallet', 'credit_wallet'] } }
+        });
+
+        const dashboardBalance = wallets.find(w => w.type === 'dashboard_wallet')?.balance || 0;
+        const creditBalance = wallets.find(w => w.type === 'credit_wallet')?.balance || 0;
+        const totalBalance = dashboardBalance + creditBalance;
+
+        res.json({
+            success: true,
+            data: {
+                card_number: card.uid.slice(-4).toUpperCase(),
+                dashboard_balance: dashboardBalance,
+                credit_balance: creditBalance,
+                available_balance: totalBalance,
+                customer_name: card.consumerProfile?.fullName || 'Customer'
+            }
+        });
+    } catch (error: any) {
+        console.error('Check card balance error:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
 };

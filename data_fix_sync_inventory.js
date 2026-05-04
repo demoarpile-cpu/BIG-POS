@@ -53,7 +53,7 @@ async function syncMissingInventory() {
           console.log(`Creating missing product: "${item.product.name}" with stock: ${item.quantity}`);
           await prisma.product.create({
             data: {
-              name: item.product.name,
+                    name: item.product.name,
               description: item.product.description,
               sku: item.product.sku,
               barcode: item.product.barcode,
