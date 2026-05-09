@@ -22,7 +22,7 @@ export class EmailService {
       const credentials = JSON.parse(process.env.GMAIL_SERVICE_ACCOUNT_JSON);
       this.auth = new google.auth.JWT({
         email: credentials.client_email,
-        key: credentials.private_key,
+        key: credentials.private_key.replace(/\\n/g, '\n'),
         scopes: ['https://www.googleapis.com/auth/gmail.send'],
         subject: process.env.GMAIL_SENDER_EMAIL || 'noreply@big.co.rw',
       });
