@@ -19,13 +19,27 @@ export class EmailService {
 
     // Support for Railway/Production: Check for raw JSON string in environment variable
     if (process.env.GMAIL_SERVICE_ACCOUNT_JSON) {
-      const credentials = JSON.parse(process.env.GMAIL_SERVICE_ACCOUNT_JSON);
-      this.auth = new google.auth.JWT({
-        email: credentials.client_email,
-        key: credentials.private_key.replace(/\\n/g, '\n'),
-        scopes: ['https://www.googleapis.com/auth/gmail.send'],
-        subject: process.env.GMAIL_SENDER_EMAIL || 'noreply@big.co.rw',
-      });
+      let rawJson = process.env.GMAIL_SERVICE_ACCOUNT_JSON.trim();
+      
+      // Fix: If the string is wrapped in extra quotes, remove them
+      if (rawJson.startsWith("'") && rawJson.endsWith("'")) {
+        rawJson = rawJson.slice(1, -1);
+      } else if (rawJson.startsWith('"') && rawJson.endsWith('"')) {
+        rawJson = rawJson.slice(1, -1);
+      }
+
+      try {
+        const credentials = JSON.parse(rawJson);
+        this.auth = new google.auth.JWT({
+          email: credentials.client_email,
+          key: credentials.private_key.replace(/\\n/g, '\n'),
+          scopes: ['https://www.googleapis.com/auth/gmail.send'],
+          subject: process.env.GMAIL_SENDER_EMAIL || 'noreply@big.co.rw',
+        });
+      } catch (parseError: any) {
+        console.error('[EmailService] Critical: Failed to parse GMAIL_SERVICE_ACCOUNT_JSON:', parseError.message);
+        throw new Error('Invalid GMAIL_SERVICE_ACCOUNT_JSON format');
+      }
     } else {
       // Local development: use the JSON file path
       const keyPath = path.resolve(process.env.GMAIL_SERVICE_ACCOUNT_PATH || './google-service-account.json');
