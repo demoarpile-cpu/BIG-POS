@@ -21,6 +21,8 @@ model User {
   isActive                         Boolean            @default(true)
   createdAt                        DateTime           @default(now())
   updatedAt                        DateTime           @updatedAt
+  isFirstLogin                     Boolean            @default(true)
+  tempPassword                     String?
   consumerProfile    ConsumerProfile?
   employeeProfile    EmployeeProfile?
   message_message_receiverIdTouser Message[]          @relation("message_receiverIdTouser")
@@ -974,4 +976,26 @@ enum courseenrollment_status {
   NOT_STARTED
   IN_PROGRESS
   COMPLETED
+}
+
+model SystemEmailLog {
+  id                  Int      @id @default(autoincrement())
+  recipientEmail      String
+  senderEmail         String   @default("noreply@big.co.rw")
+  templateType        String
+  status              EmailStatus @default(PENDING)
+  retryCount          Int      @default(0)
+  errorMessage        String?  @db.Text
+  relatedEntityType   String?
+  relatedEntityId     String?
+  timestamp           DateTime @default(now())
+
+  @@map("systememaillog")
+}
+
+enum EmailStatus {
+  PENDING
+  SENT
+  FAILED
+  PERMANENT_FAILURE
 }

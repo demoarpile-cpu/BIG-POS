@@ -1,5 +1,7 @@
 import { Request, Response } from 'express';
 import prisma from '../utils/prisma';
+import { emailQueue } from '../queues/email.queue';
+import { TemplateService } from '../services/template.service';
 
 export const handlePalmKashWebhook = async (req: Request, res: Response) => {
   try {
@@ -50,6 +52,20 @@ export const handlePalmKashWebhook = async (req: Request, res: Response) => {
                 data: { walletBalance: { increment: transaction.amount } }
               })
             ]);
+
+            // Notify Retailer of successful recharge (PRD 2.A.ii)
+            const retailer = await prisma.retailerProfile.findUnique({
+              where: { id: transaction.retailerId },
+              include: { user: true }
+            });
+            if (retailer?.user?.email) {
+              await emailQueue.add('wallet-recharge-success', {
+                to: retailer.user.email,
+                subject: '✅ Wallet Recharge Successful',
+                html: TemplateService.getWalletNotificationTemplate('RECHARGE_SUCCESS', transaction.amount, retailer.walletBalance + transaction.amount, activeReference),
+                templateType: 'RETAILER_WALLET_UPDATE'
+              });
+            }
         } else if (transaction.walletId) {
             await prisma.$transaction([
               prisma.walletTransaction.update({

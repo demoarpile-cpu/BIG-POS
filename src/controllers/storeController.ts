@@ -1,6 +1,8 @@
 import { Response } from 'express';
 import { AuthRequest } from '../middleware/authMiddleware';
 import prisma from '../utils/prisma';
+import { emailQueue } from '../queues/email.queue';
+import { TemplateService } from '../services/template.service';
 
 // Create a new retail order
 // UPDATED: Reward Gas can now be applied as partial discount during payment
@@ -342,6 +344,47 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
       timeout: 30000,
       maxWait: 10000
     });
+
+    // --- Post-Transaction Event Triggers ---
+    try {
+      // 1. Notify Retailer of Low Stock for any items in the order
+      const orderedProducts = await prisma.product.findMany({
+        where: { id: { in: items.map((i: any) => i.productId) } },
+        include: { retailerProfile: { include: { user: true } } }
+      });
+
+      for (const product of orderedProducts) {
+        const threshold = product.lowStockThreshold || 10;
+        if (product.stock <= threshold && product.retailerProfile?.user?.email) {
+          await emailQueue.add('low-stock-alert', {
+            to: product.retailerProfile.user.email,
+            subject: `⚠️ Low Stock Alert: ${product.name}`,
+            html: TemplateService.getLowStockTemplate(product.name, product.stock, threshold),
+            templateType: 'RETAILER_LOW_STOCK',
+            relatedEntity: { type: 'PRODUCT', id: product.id.toString() }
+          });
+        }
+      }
+
+      // 2. Notify Retailer of New Order
+      const retailer = await prisma.retailerProfile.findUnique({
+        where: { id: Number(retailerId) },
+        include: { user: true }
+      });
+
+      if (retailer?.user?.email) {
+        await emailQueue.add('order-confirmation', {
+          to: retailer.user.email,
+          subject: `✅ New Order Received: #${result.id}`,
+          html: TemplateService.getOrderConfirmationTemplate(result.id.toString(), items.reduce((sum: number, i: any) => sum + i.quantity, 0), total),
+          templateType: 'RETAILER_ORDER_CONFIRMATION',
+          relatedEntity: { type: 'SALE', id: result.id.toString() }
+        });
+      }
+    } catch (triggerError) {
+      console.error('Error in post-order triggers:', triggerError);
+      // Don't fail the response if email fails
+    }
 
     res.json({ success: true, order: result, message: 'Order created successfully' });
   } catch (error: any) {

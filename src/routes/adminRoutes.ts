@@ -59,7 +59,8 @@ import {
   getSettlementInvoice,
   updateSettlementInvoice,
   deleteSettlementInvoice,
-  confirmWholesaleDelivery
+  confirmWholesaleDelivery,
+  getEmailLogs
 } from '../controllers/adminController';
 import { getSuppliers, createSupplier, updateSupplier, deleteSupplier } from '../controllers/supplierController';
 import { getJobs, createJob, updateJob, deleteJob, getApplications, createApplication, updateApplicationStatus } from '../controllers/recruitmentController';
@@ -188,5 +189,8 @@ router.delete('/settlement-invoices/:id', deleteSettlementInvoice);
 // WHOLESALE ORDER MANAGEMENT
 // ==========================================
 router.post('/wholesale-orders/:id/confirm-delivery', confirmWholesaleDelivery);
+
+// Email Monitoring Routes
+router.get('/email-logs', getEmailLogs);
 
 export default router;

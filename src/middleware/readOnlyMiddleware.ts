@@ -58,20 +58,21 @@ export const enforceReadOnly = (req: AuthRequest, res: Response, next: NextFunct
   
   const isWriteOperation = WRITE_METHODS.includes(req.method);
   
-  // If it's a DELETE operation on a read-only endpoint, it's blocked UNLESS specifically allowed
-  // For now, let's keep DELETE blocked for financial endpoints, but allow it for account management?
-  // Actually, the user wants Delete button active. So I'll allow it for admin.
-  
+  // BYPASS read-only for Retailers and Wholesalers so they can test the system
+  // Only Admin is restricted to prevent demo data corruption
+  if (req.user?.role === 'retailer' || req.user?.role === 'wholesaler') {
+    return next();
+  }
+
   if (isReadOnlyEndpoint && isWriteOperation && req.user?.role === 'admin') {
-    // If it's a DELETE request to an account management endpoint, we might want to allow it?
-    // Let's check if it's one of the base account endpoints but without sub-paths
-    const isAccountDeletion = req.method === 'DELETE' && (
-      fullPath.includes('/customers/') || 
-      fullPath.includes('/retailers/') || 
-      fullPath.includes('/wholesalers/')
+    // Allow account creation (POST) and deletion (DELETE) for customers, retailers, and wholesalers
+    const isAccountManagement = (req.method === 'DELETE' || req.method === 'POST') && (
+      fullPath.includes('/customers') || 
+      fullPath.includes('/retailers') || 
+      fullPath.includes('/wholesalers')
     );
 
-    if (!isAccountDeletion) {
+    if (!isAccountManagement) {
       return res.status(403).json({
         success: false,
         error: 'Admin has read-only access. Financial data modifications are not permitted.',

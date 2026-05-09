@@ -15,6 +15,12 @@ export const register = async (req: Request, res: Response) => {
       else if (req.baseUrl.includes('wholesaler')) targetuser_role = 'wholesaler';
     }
 
+    if (targetuser_role === 'retailer' || targetuser_role === 'wholesaler') {
+      return res.status(403).json({ 
+        error: 'Self-registration is not allowed for business accounts. Please contact a BIG Ltd administrator for onboarding.' 
+      });
+    }
+
     // Check existing user
     const existingUser = await prisma.user.findFirst({
       where: {
@@ -146,6 +152,7 @@ export const login = async (req: Request, res: Response) => {
     const responseData: any = {
       success: true,
       access_token: token,
+      require_password_reset: user.isFirstLogin
     };
 
     if (targetuser_role === 'consumer') {
@@ -217,7 +224,11 @@ export const updatePassword = async (req: any, res: Response) => {
     const hashedPassword = await hashPassword(new_password);
     await prisma.user.update({
       where: { id: userId },
-      data: { password: hashedPassword }
+      data: { 
+        password: hashedPassword,
+        isFirstLogin: false,
+        tempPassword: null
+      }
     });
 
     res.json({ success: true, message: 'Password updated successfully' });

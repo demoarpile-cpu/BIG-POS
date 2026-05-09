@@ -3,6 +3,10 @@ import { AuthRequest } from '../middleware/authMiddleware';
 import prisma from '../utils/prisma';
 import { uploadImage } from '../utils/cloudinary';
 import { hashPassword } from '../utils/auth';
+import crypto from 'crypto';
+import { emailQueue } from '../queues/email.queue';
+import { TemplateService } from '../services/template.service';
+import { validateBusinessEmailFormat } from '../utils/email-validator';
 
 // Get detailed dashboard stats
 export const getDashboard = async (req: AuthRequest, res: Response) => {
@@ -406,28 +410,40 @@ export const createRetailer = async (req: AuthRequest, res: Response) => {
   try {
     const { email, password, business_name, phone, address, credit_limit } = req.body;
 
-    if (!email || !password || !business_name || !phone) {
-      return res.status(400).json({ error: 'Missing required fields: email, password, business_name, and phone are required' });
+    // Check if user already exists
+    const existingUser = await prisma.user.findUnique({ where: { email } });
+    if (existingUser) {
+      return res.status(400).json({ error: `The email ${email} is already registered. Please use a unique business email.` });
     }
 
-    const existingEmail = await prisma.user.findFirst({ where: { email } });
-    if (existingEmail) return res.status(400).json({ error: `Retailer with email ${email} already exists` });
+    if (!validateBusinessEmailFormat(email, 'retailer')) {
+      return res.status(400).json({ error: 'Retailer email must follow the format: name.retailer@big.co.rw' });
+    }
 
-    const existingPhone = await prisma.user.findFirst({ where: { phone } });
-    if (existingPhone) return res.status(400).json({ error: `Retailer with phone ${phone} already exists` });
-
-    const hashedPassword = await hashPassword(password);
+    const tempPassword = crypto.randomBytes(4).toString('hex');
+    const hashedPassword = await hashPassword(tempPassword);
 
     const user = await prisma.user.create({
       data: {
         email,
         phone,
         password: hashedPassword,
+        tempPassword: tempPassword,
+        isFirstLogin: true,
         role: 'retailer',
         name: business_name,
-        isActive: true // Default to active?
+        isActive: true
       }
     });
+
+    // Queue Onboarding Email
+    await emailQueue.add('onboarding-email', {
+      to: email,
+      subject: 'Welcome to BIG Ltd - Your Retailer Account is Ready',
+      html: TemplateService.getOnboardingTemplate(business_name, 'Retailer', email, tempPassword),
+      templateType: 'RETAILER_ONBOARDING',
+      relatedEntity: { type: 'USER', id: user.id.toString() }
+    }, { attempts: 3, backoff: { type: 'exponential', delay: 5000 } });
 
     await prisma.retailerProfile.create({
       data: {
@@ -462,28 +478,40 @@ export const createWholesaler = async (req: AuthRequest, res: Response) => {
   try {
     const { email, password, company_name, phone, address } = req.body;
 
-    if (!email || !password || !company_name || !phone) {
-      return res.status(400).json({ error: 'Missing required fields: email, password, company_name, and phone are required' });
+    // Check if user already exists
+    const existingUser = await prisma.user.findUnique({ where: { email } });
+    if (existingUser) {
+      return res.status(400).json({ error: `The email ${email} is already registered. Please use a unique business email.` });
     }
 
-    const existingEmail = await prisma.user.findFirst({ where: { email } });
-    if (existingEmail) return res.status(400).json({ error: `Wholesaler with email ${email} already exists` });
+    if (!validateBusinessEmailFormat(email, 'wholesaler')) {
+      return res.status(400).json({ error: 'Wholesaler email must follow the format: name.wholesaler@big.co.rw' });
+    }
 
-    const existingPhone = await prisma.user.findFirst({ where: { phone } });
-    if (existingPhone) return res.status(400).json({ error: `Wholesaler with phone ${phone} already exists` });
-
-    const hashedPassword = await hashPassword(password);
+    const tempPassword = crypto.randomBytes(4).toString('hex');
+    const hashedPassword = await hashPassword(tempPassword);
 
     const user = await prisma.user.create({
       data: {
         email,
         phone,
         password: hashedPassword,
+        tempPassword: tempPassword,
+        isFirstLogin: true,
         role: 'wholesaler',
         name: company_name,
         isActive: true
       }
     });
+
+    // Queue Onboarding Email
+    await emailQueue.add('onboarding-email', {
+      to: email,
+      subject: 'Welcome to BIG Ltd - Your Wholesaler Account is Ready',
+      html: TemplateService.getOnboardingTemplate(company_name, 'Wholesaler', email, tempPassword),
+      templateType: 'WHOLESALER_ONBOARDING',
+      relatedEntity: { type: 'USER', id: user.id.toString() }
+    }, { attempts: 3, backoff: { type: 'exponential', delay: 5000 } });
 
     await prisma.wholesalerProfile.create({
       data: {
@@ -720,7 +748,7 @@ export const updateRetailer = async (req: AuthRequest, res: Response) => {
       data: {
         shopName: business_name,
         address,
-        creditLimit: Number(credit_limit),
+        creditLimit: credit_limit ? Number(credit_limit) : undefined,
       }
     });
 
@@ -906,12 +934,22 @@ export const updateRetailerStatus = async (req: AuthRequest, res: Response) => {
     console.log(`Resolved status for User ${retailer.userId}: ${newStatus}`);
 
     // Update User status
-    await prisma.user.update({
+    const updatedUser = await prisma.user.update({
       where: { id: retailer.userId },
       data: {
         isActive: newStatus
       }
     });
+
+    // Notify User of account action (PRD 2.A.iv)
+    if (updatedUser.email) {
+      await emailQueue.add('account-action-alert', {
+        to: updatedUser.email,
+        subject: newStatus ? '✅ Account Reactivated' : '🚨 Account Suspension Notice',
+        html: TemplateService.getAccountActionTemplate(newStatus ? 'ACTIVATED' : 'SUSPENDED'),
+        templateType: 'ACCOUNT_ACTION_ALERT'
+      });
+    }
 
     res.json({ success: true, message: `Retailer status updated to ${newStatus ? 'active' : 'inactive'}` });
   } catch (error: any) {
@@ -945,12 +983,22 @@ export const updateWholesalerStatus = async (req: AuthRequest, res: Response) =>
     console.log(`Resolved status for User ${wholesaler.userId}: ${newStatus}`);
 
     // Update User status
-    await prisma.user.update({
+    const updatedUser = await prisma.user.update({
       where: { id: wholesaler.userId },
       data: {
         isActive: newStatus
       }
     });
+
+    // Notify User of account action (PRD 2.A.iv)
+    if (updatedUser.email) {
+      await emailQueue.add('account-action-alert', {
+        to: updatedUser.email,
+        subject: newStatus ? '✅ Account Reactivated' : '🚨 Account Suspension Notice',
+        html: TemplateService.getAccountActionTemplate(newStatus ? 'ACTIVATED' : 'SUSPENDED'),
+        templateType: 'ACCOUNT_ACTION_ALERT'
+      });
+    }
 
     res.json({ success: true, message: `Wholesaler status updated to ${newStatus ? 'active' : 'inactive'}` });
   } catch (error: any) {
@@ -2727,6 +2775,46 @@ export const confirmWholesaleDelivery = async (req: AuthRequest, res: Response) 
     res.json({ success: true, order: result, message: 'Delivery confirmed and retailer stock updated by Admin' });
   } catch (error: any) {
     console.error('Error confirming delivery by Admin:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+/**
+ * Get system email logs for monitoring
+ */
+export const getEmailLogs = async (req: AuthRequest, res: Response) => {
+  try {
+    const { page = 1, limit = 50, status, search } = req.query;
+    const skip = (Number(page) - 1) * Number(limit);
+
+    const where: any = {};
+    if (status) where.status = status;
+    if (search) {
+      where.OR = [
+        { recipientEmail: { contains: search as string } },
+        { templateType: { contains: search as string } },
+        { relatedEntityId: { contains: search as string } }
+      ];
+    }
+
+    const [logs, total] = await Promise.all([
+      prisma.systemEmailLog.findMany({
+        where,
+        orderBy: { timestamp: 'desc' },
+        take: Number(limit),
+        skip: skip
+      }),
+      prisma.systemEmailLog.count({ where })
+    ]);
+
+    res.json({ 
+      success: true, 
+      logs, 
+      total, 
+      page: Number(page),
+      totalPages: Math.ceil(total / Number(limit)) 
+    });
+  } catch (error: any) {
     res.status(500).json({ success: false, error: error.message });
   }
 };

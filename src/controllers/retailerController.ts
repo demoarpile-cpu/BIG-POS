@@ -2,6 +2,8 @@ import { Response } from 'express';
 import { AuthRequest } from '../middleware/authMiddleware';
 import prisma from '../utils/prisma';
 import { uploadImage } from '../utils/cloudinary';
+import { emailQueue } from '../queues/email.queue';
+import { TemplateService } from '../services/template.service';
 
 // Get dashboard stats
 // Get dashboard stats with comprehensive calculations
@@ -1033,6 +1035,31 @@ export const createSale = async (req: AuthRequest, res: Response) => {
       return sale;
     }, { timeout: 20000 });
 
+    // --- Post-Transaction Event Triggers ---
+    try {
+      // 1. Notify Retailer of Low Stock for any items in the sale
+      const soldProductIds = items.map((i: any) => Number(i.product_id));
+      const soldProducts = await prisma.product.findMany({
+        where: { id: { in: soldProductIds } },
+        include: { retailerProfile: { include: { user: true } } }
+      });
+
+      for (const product of soldProducts) {
+        const threshold = product.lowStockThreshold || 10;
+        if (product.stock <= threshold && product.retailerProfile?.user?.email) {
+          await emailQueue.add('low-stock-alert', {
+            to: product.retailerProfile.user.email,
+            subject: `⚠️ Low Stock Alert: ${product.name}`,
+            html: TemplateService.getLowStockTemplate(product.name, product.stock, threshold),
+            templateType: 'RETAILER_LOW_STOCK',
+            relatedEntity: { type: 'PRODUCT', id: product.id.toString() }
+          });
+        }
+      }
+    } catch (triggerError) {
+      console.error('Error in post-sale triggers:', triggerError);
+    }
+
     res.json({ success: true, sale: result });
 
   } catch (error: any) {
@@ -1484,6 +1511,51 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
 
       return order;
     }, { timeout: 15000 });
+
+    // --- Post-Transaction Event Triggers ---
+    try {
+      // 1. Notify Retailer (Confirmation)
+      if (retailerProfile.user?.email) {
+        await emailQueue.add('order-confirmation', {
+          to: retailerProfile.user.email,
+          subject: `✅ Order Sent to Wholesaler: #${result.id}`,
+          html: TemplateService.getOrderConfirmationTemplate(result.id.toString(), items.reduce((sum: number, i: any) => sum + i.quantity, 0), totalAmount),
+          templateType: 'RETAILER_WHOLESALE_ORDER',
+          relatedEntity: { type: 'ORDER', id: result.id.toString() }
+        });
+      }
+
+      // 2. Notify Wholesaler (New Order Alert)
+      const wholesaler = await prisma.wholesalerProfile.findUnique({
+        where: { id: result.wholesalerId },
+        include: { user: true }
+      });
+
+      if (wholesaler?.user?.email) {
+        await emailQueue.add('new-order-alert', {
+          to: wholesaler.user.email,
+          subject: `📦 New Order from ${retailerProfile.shopName}: #${result.id}`,
+          html: TemplateService.getOrderConfirmationTemplate(result.id.toString(), items.reduce((sum: number, i: any) => sum + i.quantity, 0), totalAmount),
+          templateType: 'WHOLESALER_NEW_ORDER',
+          relatedEntity: { type: 'ORDER', id: result.id.toString() }
+        });
+      }
+
+      // 3. Notify Retailer of Low Wallet Balance (PRD 2.A.ii)
+      if (paymentMethod === 'wallet') {
+        const remainingBalance = retailerProfile.walletBalance - totalAmount;
+        if (remainingBalance < 5000 && retailerProfile.user?.email) {
+          await emailQueue.add('wallet-balance-low', {
+            to: retailerProfile.user.email,
+            subject: '⚠️ Wallet Balance Low',
+            html: TemplateService.getWalletNotificationTemplate('LOW_BALANCE', 0, remainingBalance),
+            templateType: 'RETAILER_WALLET_WARNING'
+          });
+        }
+      }
+    } catch (triggerError) {
+      console.error('Error in post-order triggers:', triggerError);
+    }
 
     res.json({ success: true, order: result });
   } catch (error: any) {

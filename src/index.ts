@@ -133,8 +133,12 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
   });
 });
 
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
   console.log(`Server is running on port ${PORT}`);
+  
+  // Initialize Background Scheduler
+  const { initScheduler } = await import('./queues/scheduler');
+  await initScheduler();
 });
 
 process.on('uncaughtException', (err) => {
