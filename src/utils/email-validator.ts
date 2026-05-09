@@ -23,9 +23,9 @@ export const validateBusinessEmailFormat = (email: string, role: 'retailer' | 'w
   
   const [localPart] = email.split('@');
   if (role === 'retailer') {
-    return localPart.endsWith('.retailer');
+    return localPart.endsWith('retailer');
   } else if (role === 'wholesaler') {
-    return localPart.endsWith('.wholesaler');
+    return localPart.endsWith('wholesaler');
   }
   return false;
 };
