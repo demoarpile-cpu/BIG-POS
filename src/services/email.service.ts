@@ -40,19 +40,28 @@ export class EmailService {
       try {
         const credentials = JSON.parse(rawJson);
         
-        // Final Fix: Repair the PEM key format to resolve DECODER routines::unsupported
+        // Final Fix: Aggressive PEM key normalization
         let privateKey = credentials.private_key;
         
-        // 1. Convert literal \n to real newlines
+        // 1. Convert any escaped newlines to real ones
         privateKey = privateKey.replace(/\\n/g, '\n');
         
-        // 2. Ensure it has the correct header/footer and no weird spacing
-        if (!privateKey.includes('-----BEGIN PRIVATE KEY-----')) {
-          privateKey = `-----BEGIN PRIVATE KEY-----\n${privateKey}\n-----END PRIVATE KEY-----`;
+        // 2. Extract the base64 part only (remove headers/footers if present)
+        const cleanKey = privateKey
+          .replace('-----BEGIN PRIVATE KEY-----', '')
+          .replace('-----END PRIVATE KEY-----', '')
+          .replace(/\s/g, ''); // Remove all whitespace/newlines
+          
+        // 3. Rebuild the key with perfect 64-character line breaks
+        const matches = cleanKey.match(/.{1,64}/g);
+        if (matches) {
+          privateKey = [
+            '-----BEGIN PRIVATE KEY-----',
+            ...matches,
+            '-----END PRIVATE KEY-----',
+            ''
+          ].join('\n');
         }
-        
-        // 3. Remove any accidental double headers or extra whitespace
-        privateKey = privateKey.trim();
 
         this.auth = new google.auth.JWT({
           email: credentials.client_email,
