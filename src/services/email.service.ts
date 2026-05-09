@@ -21,6 +21,15 @@ export class EmailService {
     if (process.env.GMAIL_SERVICE_ACCOUNT_JSON) {
       let rawJson = process.env.GMAIL_SERVICE_ACCOUNT_JSON.trim();
       
+      // Fix: If it is Base64 encoded (doesn't start with {), decode it
+      if (!rawJson.startsWith('{')) {
+        try {
+          rawJson = Buffer.from(rawJson, 'base64').toString('utf8');
+        } catch (e) {
+          console.error('[EmailService] Base64 decode failed, trying as raw string');
+        }
+      }
+
       // Fix: If the string is wrapped in extra quotes, remove them
       if (rawJson.startsWith("'") && rawJson.endsWith("'")) {
         rawJson = rawJson.slice(1, -1);
