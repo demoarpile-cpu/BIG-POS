@@ -39,9 +39,24 @@ export class EmailService {
 
       try {
         const credentials = JSON.parse(rawJson);
+        
+        // Final Fix: Repair the PEM key format to resolve DECODER routines::unsupported
+        let privateKey = credentials.private_key;
+        
+        // 1. Convert literal \n to real newlines
+        privateKey = privateKey.replace(/\\n/g, '\n');
+        
+        // 2. Ensure it has the correct header/footer and no weird spacing
+        if (!privateKey.includes('-----BEGIN PRIVATE KEY-----')) {
+          privateKey = `-----BEGIN PRIVATE KEY-----\n${privateKey}\n-----END PRIVATE KEY-----`;
+        }
+        
+        // 3. Remove any accidental double headers or extra whitespace
+        privateKey = privateKey.trim();
+
         this.auth = new google.auth.JWT({
           email: credentials.client_email,
-          key: credentials.private_key.replace(/\\n/g, '\n'),
+          key: privateKey,
           scopes: ['https://www.googleapis.com/auth/gmail.send'],
           subject: process.env.GMAIL_SENDER_EMAIL || 'noreply@big.co.rw',
         });
