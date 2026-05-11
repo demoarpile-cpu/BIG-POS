@@ -30,7 +30,7 @@ export const getDashboard = async (req: AuthRequest, res: Response) => {
     const orderProcessing = sales.filter(s => s.status === 'processing').length;
     const orderDelivered = sales.filter(s => s.status === 'completed' || s.status === 'delivered').length;
     const orderCancelled = sales.filter(s => s.status === 'cancelled').length;
-    const totalRevenue = sales.reduce((acc, s) => acc + s.totalAmount, 0);
+    const totalRevenue = Math.round(sales.reduce((acc, s) => acc + s.totalAmount, 0));
     const todayOrders = sales.filter(s => s.createdAt >= todayStart).length;
 
     // 3. Transactions (using WalletTransaction)
@@ -39,7 +39,7 @@ export const getDashboard = async (req: AuthRequest, res: Response) => {
     const walletTopups = txs.filter(t => t.type === 'top_up').length;
     const gasPurchases = txs.filter(t => t.type === 'gas_payment' || t.type === 'gas_purchase').length;
     const nfcPayments = sales.filter(s => s.paymentMethod === 'nfc' && s.createdAt >= last30d).length;
-    const totalVolume = txs.reduce((acc, t) => acc + t.amount, 0);
+    const totalVolume = Math.round(txs.reduce((acc, t) => acc + t.amount, 0));
 
     // 4. Loans
     const loans = await prisma.loan.findMany();
@@ -48,13 +48,13 @@ export const getDashboard = async (req: AuthRequest, res: Response) => {
     const loanActive = loans.filter(l => l.status === 'active' || l.status === 'approved').length;
     const loanPaid = loans.filter(l => l.status === 'paid' || l.status === 'repaid').length;
     const loanDefaulted = loans.filter(l => l.status === 'defaulted' || l.status === 'overdue').length;
-    const outstandingAmount = loans.reduce((acc, l) => l.status === 'active' ? acc + l.amount : acc, 0);
+    const outstandingAmount = Math.round(loans.reduce((acc, l) => l.status === 'active' ? acc + l.amount : acc, 0));
 
     // 5. Gas (using GasTopup or Sale with gas category)
     const gasTopups = await prisma.gasTopup.findMany();
     const gasTotalPurchases = gasTopups.length;
-    const gasTotalAmount = gasTopups.reduce((acc, g) => acc + g.amount, 0);
-    const gasTotalUnits = gasTopups.reduce((acc, g) => acc + g.units, 0);
+    const gasTotalAmount = Math.round(gasTopups.reduce((acc, g) => acc + g.amount, 0));
+    const gasTotalUnits = Math.round(gasTopups.reduce((acc, g) => acc + g.units, 0) * 100) / 100;
 
     // 6. NFC Cards
     const nfcTotal = await prisma.nfcCard.count();
@@ -63,10 +63,10 @@ export const getDashboard = async (req: AuthRequest, res: Response) => {
 
     // 7. Retailers & Wholesalers
     const retailerTotal = await prisma.retailerProfile.count();
-    const retailerActive = await prisma.user.count({ where: { role: 'retailer', isActive: true } });
+    const retailerActive = await prisma.retailerProfile.count({ where: { user: { isActive: true } } });
     const retailerVerified = await prisma.retailerProfile.count({ where: { isVerified: true } });
     const wholesalerTotal = await prisma.wholesalerProfile.count();
-    const wholesalerActive = await prisma.user.count({ where: { role: 'wholesaler', isActive: true } });
+    const wholesalerActive = await prisma.wholesalerProfile.count({ where: { user: { isActive: true } } });
 
     // Recent Activity - Merge Sales, New Customers, Loans, and Gas Topups
     const [recentSales, recentConsumers, recentLoans, recentGas] = await Promise.all([
@@ -100,7 +100,7 @@ export const getDashboard = async (req: AuthRequest, res: Response) => {
         id: `sale-${s.id}`,
         action: 'order_placed',
         entity_type: 'order',
-        description: `Order of ${s.totalAmount} RWF by ${s.consumerProfile?.fullName || 'Customer'}`,
+        description: `Order of ${Math.round(s.totalAmount)} RWF by ${s.consumerProfile?.fullName || 'Customer'}`,
         created_at: s.createdAt
       })),
       ...recentConsumers.map(c => ({
@@ -114,14 +114,14 @@ export const getDashboard = async (req: AuthRequest, res: Response) => {
         id: `loan-${l.id}`,
         action: l.status === 'approved' ? 'loan_approved' : 'loan_requested',
         entity_type: 'loan',
-        description: `Loan of ${l.amount} RWF ${l.status}`,
+        description: `Loan of ${Math.round(l.amount)} RWF ${l.status}`,
         created_at: l.createdAt
       })),
       ...recentGas.map(g => ({
         id: `gas-${g.id}`,
         action: 'gas_recharge',
         entity_type: 'gas',
-        description: `${g.amount} RWF recharge for ${g.consumerProfile?.fullName || 'Customer'}`,
+        description: `${Math.round(g.amount)} RWF recharge for ${g.consumerProfile?.fullName || 'Customer'}`,
         created_at: g.createdAt
       }))
     ];
@@ -1775,7 +1775,7 @@ export const getTransactionReport = async (req: AuthRequest, res: Response) => {
         grouped[key] = { period, type, count: 0, total_amount: 0 };
       }
       grouped[key].count += 1;
-      grouped[key].total_amount += tx.amount;
+      grouped[key].total_amount = Math.round(grouped[key].total_amount + tx.amount);
     });
 
     res.json({ success: true, report: Object.values(grouped) });
@@ -1817,7 +1817,7 @@ export const getRevenueReport = async (req: AuthRequest, res: Response) => {
       if (!grouped[period]) {
         grouped[period] = { period, order_revenue: 0, order_count: 0, gas_revenue: 0, gas_count: 0 };
       }
-      grouped[period].order_revenue += s.totalAmount;
+      grouped[period].order_revenue = Math.round(grouped[period].order_revenue + s.totalAmount);
       grouped[period].order_count += 1;
     });
 
@@ -1830,7 +1830,7 @@ export const getRevenueReport = async (req: AuthRequest, res: Response) => {
       if (!grouped[period]) {
         grouped[period] = { period, order_revenue: 0, order_count: 0, gas_revenue: 0, gas_count: 0 };
       }
-      grouped[period].gas_revenue += g.amount;
+      grouped[period].gas_revenue = Math.round(grouped[period].gas_revenue + g.amount);
       grouped[period].gas_count += 1;
     });
 

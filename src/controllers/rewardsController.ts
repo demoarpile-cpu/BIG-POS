@@ -313,7 +313,7 @@ export const redeemRewards = async (req: AuthRequest, res: Response) => {
                 rwf_credited: rwfAmount,
                 new_balance: wallet.balance + rwfAmount
             },
-            message: `Successfully redeemed ${points} points for ${rwfAmount.toLocaleString()} RWF`
+            message: `Successfully redeemed ${(points / 100).toFixed(3)} M³ for ${rwfAmount.toLocaleString()} RWF`
         });
     } catch (error: any) {
         console.error('Redeem rewards error:', error);
