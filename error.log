@@ -101,3 +101,5 @@
     at console.value (node:internal/console/constructor:303:16)
     at console.log (node:internal/console/constructor:378:26)
     at _log (C:\Users\91969\Documents\big_company\backend\node_modules\dotenv\lib\main.js:142:11)
+[2026-05-11T05:46:55.624Z] FATAL UNHANDLED REJECTION: Error: Connection is closed.
+[2026-05-11T05:47:00.246Z] FATAL UNHANDLED REJECTION: Error: Connection is closed.

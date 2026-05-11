@@ -999,3 +999,33 @@ enum EmailStatus {
   FAILED
   PERMANENT_FAILURE
 }
+
+model News {
+  id               Int      @id @default(autoincrement())
+  title            String
+  shortDescription String   @db.Text
+  fullContent      String   @db.LongText
+  image            String?
+  author           String?
+  status           String   @default("published") // published, hidden
+  publishedAt      DateTime @default(now())
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@map("news")
+}
+
+model Blog {
+  id               Int      @id @default(autoincrement())
+  title            String
+  category         String?
+  blogText         String   @db.LongText
+  image            String?
+  author           String?
+  status           String   @default("published") // published, hidden
+  publishedAt      DateTime @default(now())
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@map("blog")
+}

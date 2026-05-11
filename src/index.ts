@@ -15,6 +15,7 @@ import trainingRoutes from './routes/trainingRoutes';
 import webhookRoutes from './routes/webhookRoutes';
 import ipDebugRoutes from './routes/ipDebugRoutes';
 import gasMeterRechargeRoutes from './routes/gasMeterRechargeRoutes';
+import contentRoutes from './routes/contentRoutes';
 console.log('--- Server Starting ---');
 
 dotenv.config();
@@ -96,6 +97,7 @@ app.use('/api/webhooks', webhookRoutes);
 app.use('/api/debug', ipDebugRoutes); // Temporary IP debug endpoint
 app.use('/debug', debugRoutes); // Public debug endpoint
 app.use('/gas-recharge', gasMeterRechargeRoutes); // Gas Meter Recharge module
+app.use('/content', contentRoutes); // News and Blog management
 setAppInstance(app); // Enable route listing in debug
 
 app.get('/', (req, res) => {

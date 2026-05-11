@@ -17,7 +17,7 @@ const connection = new IORedis(redisUrl, {
 });
 
 // Create the email queue with global retry defaults (Requirement: 3 retries if failed)
-export const emailQueue = new Queue('email-queue', { 
+export const emailQueue = new Queue('email-queue', {
   connection,
   defaultJobOptions: {
     attempts: 3,
@@ -44,20 +44,20 @@ export const emailWorker = new Worker(
     }
 
     const { to, subject, html, templateType, relatedEntity, logId } = job.data;
-    
+
     console.log(`[EmailWorker] Processing job ${job.id} for ${to} (Attempt ${job.attemptsMade + 1})`);
-    
+
     try {
       // Send the email and pass the logId to track retries on the same record
       const result = await EmailService.sendEmail(
-        to, 
-        subject, 
-        html, 
-        templateType, 
-        relatedEntity, 
+        to,
+        subject,
+        html,
+        templateType,
+        relatedEntity,
         logId
       );
-      
+
       // If this was the first attempt, save the logId to job data for future retries
       if (!logId && result.logId) {
         await job.updateData({ ...job.data, logId: result.logId });
@@ -67,7 +67,7 @@ export const emailWorker = new Worker(
       throw error; // Re-throw to trigger BullMQ's automatic retry logic
     }
   },
-  { 
+  {
     connection,
     limiter: {
       max: 10, // Avoid Gmail rate limiting
@@ -82,12 +82,12 @@ export const emailWorker = new Worker(
 emailWorker.on('failed', async (job: Job | undefined, err: Error) => {
   if (job && job.attemptsMade >= (job.opts.attempts || 3)) {
     console.error(`[EmailWorker] Job ${job.id} permanently failed after ${job.attemptsMade} attempts.`);
-    
+
     const logId = job.data.logId;
     if (logId) {
       await prisma.systemEmailLog.update({
         where: { id: logId },
-        data: { 
+        data: {
           status: 'PERMANENT_FAILURE',
           errorMessage: `Permanently failed after ${job.attemptsMade} retries. Last Error: ${err.message}`
         },
