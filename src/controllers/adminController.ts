@@ -134,12 +134,12 @@ export const getDashboard = async (req: AuthRequest, res: Response) => {
 
     const dashboard = {
       customers: { total: customerTotal, last24h: customerLast24h, last7d: customerLast7d, last30d: customerLast30d },
-      orders: { 
-        total: orderTotal, 
-        pending: orderPending, 
-        processing: orderProcessing, 
-        delivered: orderDelivered, 
-        cancelled: orderCancelled, 
+      orders: {
+        total: orderTotal,
+        pending: orderPending,
+        processing: orderProcessing,
+        delivered: orderDelivered,
+        cancelled: orderCancelled,
         totalRevenue,
         todayOrders
       },
@@ -216,7 +216,7 @@ export const getReports = async (req: AuthRequest, res: Response) => {
     const totalLoanAmount = loans.reduce((acc, l) => (l.status === 'active' || l.status === 'approved') ? acc + l.amount : acc, 0);
 
     // 3. Growth rate (Simple mock for now, or compare with previous period if data exists)
-    const growthRate = 12.5; 
+    const growthRate = 12.5;
 
     res.json({
       success: true,
@@ -255,7 +255,7 @@ export const getReports = async (req: AuthRequest, res: Response) => {
 export const getCustomers = async (req: AuthRequest, res: Response) => {
   try {
     const customers = await prisma.consumerProfile.findMany({
-      include: { 
+      include: {
         user: true,
         wallets: true,
         sales: {
@@ -279,7 +279,7 @@ export const getCustomers = async (req: AuthRequest, res: Response) => {
       const totalSpent = customer.sales.reduce((sum, sale) => sum + sale.totalAmount, 0);
       const gasRewardWalletBalance = customer.wallets.find(w => w.type === 'gas_rewards_wallet')?.balance || 0;
       const gasBalance = gasRewardWalletBalance.toFixed(2) + " M³";
-      
+
       return {
         ...customer,
         orderCount,
@@ -324,7 +324,7 @@ export const getCustomer = async (req: AuthRequest, res: Response) => {
 export const createCustomer = async (req: AuthRequest, res: Response) => {
   try {
     const { email, phone, password, pin, first_name, last_name, full_name } = req.body;
-    
+
     console.log('📝 Creating customer with data:', { first_name, last_name, full_name, phone, email });
 
     // Validate required fields
@@ -357,9 +357,9 @@ export const createCustomer = async (req: AuthRequest, res: Response) => {
     // Create user and profile in transaction
     const result = await prisma.$transaction(async (tx) => {
       // Construct full name properly
-      const fullName = full_name || 
+      const fullName = full_name ||
         (first_name ? `${first_name}${last_name ? ' ' + last_name : ''}`.trim() : null);
-      
+
       const userName = fullName || phone;
 
       const user = await tx.user.create({
@@ -384,8 +384,8 @@ export const createCustomer = async (req: AuthRequest, res: Response) => {
       return { user, consumerProfile };
     });
 
-    res.status(201).json({ 
-      success: true, 
+    res.status(201).json({
+      success: true,
       message: 'Customer created successfully',
       customer: {
         ...result.consumerProfile,
@@ -542,7 +542,7 @@ export const getLoans = async (req: AuthRequest, res: Response) => {
       if (fs.existsSync(p)) {
         rates = { ...rates, ...JSON.parse(fs.readFileSync(p, 'utf8')) };
       }
-    } catch (e) {}
+    } catch (e) { }
 
     // 1. Fetch Consumer Loans
     const consumerLoansRaw = await prisma.loan.findMany({
@@ -620,7 +620,7 @@ export const getLoans = async (req: AuthRequest, res: Response) => {
       const rate = Number(rates.retailerInterestRate) || 5;
       const interestAmount = Math.round(cr.amount * (rate / 100));
       const totalRepayable = cr.amount + interestAmount;
-      
+
       let st = cr.status;
       if (st === 'pending') st = 'pending';
       else if (st === 'approved') st = 'active';
@@ -643,7 +643,7 @@ export const getLoans = async (req: AuthRequest, res: Response) => {
         status: st,
         lender: cr.retailerProfile?.linkedWholesaler?.companyName || 'Associated Wholesaler Shop',
         created_at: cr.createdAt.toISOString(),
-        due_date: new Date(cr.createdAt.getTime() + 30*24*60*60*1000).toISOString()
+        due_date: new Date(cr.createdAt.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString()
       };
     });
 
@@ -668,8 +668,8 @@ export const getLoans = async (req: AuthRequest, res: Response) => {
         amount_remaining: (5000000 + wInterest1) - 2000000,
         status: 'active',
         lender: 'BIG INNOVATION GROUP Ltd',
-        created_at: new Date(Date.now() - 45*24*60*60*1000).toISOString(),
-        due_date: new Date(Date.now() + 135*24*60*60*1000).toISOString()
+        created_at: new Date(Date.now() - 45 * 24 * 60 * 60 * 1000).toISOString(),
+        due_date: new Date(Date.now() + 135 * 24 * 60 * 60 * 1000).toISOString()
       },
       {
         id: 20002,
@@ -686,8 +686,8 @@ export const getLoans = async (req: AuthRequest, res: Response) => {
         amount_remaining: 0,
         status: 'completed',
         lender: 'Partner Bank (Equity Bank)',
-        created_at: new Date(Date.now() - 365*24*60*60*1000).toISOString(),
-        due_date: new Date(Date.now() - 5*24*60*60*1000).toISOString()
+        created_at: new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString(),
+        due_date: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString()
       }
     ];
 
@@ -704,11 +704,11 @@ export const getNFCCards = async (req: AuthRequest, res: Response) => {
   try {
     const cards = await prisma.nfcCard.findMany({
       include: {
-        consumerProfile: { 
-          include: { 
+        consumerProfile: {
+          include: {
             user: true,
-            wallets: true 
-          } 
+            wallets: true
+          }
         },
         retailerProfile: { include: { user: true } }
       }
@@ -717,7 +717,7 @@ export const getNFCCards = async (req: AuthRequest, res: Response) => {
     const formattedCards = await Promise.all(cards.map(async (card) => {
       const dashboardWallet = card.consumerProfile?.wallets.find(w => w.type === 'dashboard_wallet');
       const creditWallet = card.consumerProfile?.wallets.find(w => w.type === 'credit_wallet');
-      
+
       // Calculate actual transaction count from both Retail sales and Gas recharges
       let transactionCount = 0;
       if (card.consumerId) {
@@ -729,12 +729,12 @@ export const getNFCCards = async (req: AuthRequest, res: Response) => {
       }
 
       // Fallback cascading logic to find accurate user identification
-      const candidateName = card.consumerProfile?.fullName || 
-                           card.consumerProfile?.user?.name || 
-                           card.retailerProfile?.shopName || 
-                           card.retailerProfile?.user?.name || 
-                           card.cardholderName ||
-                           'Unassigned';
+      const candidateName = card.consumerProfile?.fullName ||
+        card.consumerProfile?.user?.name ||
+        card.retailerProfile?.shopName ||
+        card.retailerProfile?.user?.name ||
+        card.cardholderName ||
+        'Unassigned';
 
       return {
         id: card.id,
@@ -772,7 +772,7 @@ export const getCategories = async (req: AuthRequest, res: Response) => {
     const categoriesWithCount = await Promise.all(
       categories.map(async (cat) => {
         const productCount = await prisma.product.count({
-          where: { 
+          where: {
             category: cat.name,
             status: 'active'
           }
@@ -1206,9 +1206,9 @@ export const updateCustomer = async (req: AuthRequest, res: Response) => {
 
 export const updateCustomerStatus = async (req: AuthRequest, res: Response) => {
   try {
-    const { id } = req.params; 
+    const { id } = req.params;
     const { status, isActive } = req.body;
-    
+
     console.log(`[AdminAPI] updateCustomerStatus - ID: ${id}, isActive: ${isActive}, status: ${status}`);
 
     // Determine new status
@@ -1222,10 +1222,10 @@ export const updateCustomerStatus = async (req: AuthRequest, res: Response) => {
     }
 
     const targetId = Number(id);
-    
+
     // Check if it's a profile ID
     let profile = await prisma.consumerProfile.findUnique({ where: { id: targetId } });
-    
+
     if (profile) {
       console.log(`[AdminAPI] Found ConsumerProfile by ID ${targetId}, updating user ${profile.userId}`);
       await prisma.user.update({
@@ -1239,7 +1239,7 @@ export const updateCustomerStatus = async (req: AuthRequest, res: Response) => {
         console.error(`[AdminAPI] Customer not found for ID ${targetId}`);
         return res.status(404).json({ error: 'Customer not found' });
       }
-      
+
       console.log(`[AdminAPI] Found User by ID ${targetId}, updating directly`);
       await prisma.user.update({
         where: { id: user.id },
@@ -1850,9 +1850,9 @@ export const rejectLoan = async (req: AuthRequest, res: Response) => {
 
 export const registerNFCCard = async (req: AuthRequest, res: Response) => {
   try {
-    const { 
-      uid, 
-      pin, 
+    const {
+      uid,
+      pin,
       cardType,
       cardholderName,
       nationalId,
@@ -1878,26 +1878,26 @@ export const registerNFCCard = async (req: AuthRequest, res: Response) => {
 
     // 1. If userId provided explicitly
     if (userId) {
-        const profile = await prisma.consumerProfile.findFirst({ where: { userId: Number(userId) } }); // Assuming userId is User model ID
-        if (profile) consumerId = profile.id;
-        else {
-            // Maybe it WAS the consumerProfile ID?
-             const profileById = await prisma.consumerProfile.findUnique({ where: { id: Number(userId) } });
-             if (profileById) consumerId = profileById.id;
-        }
-    } 
+      const profile = await prisma.consumerProfile.findFirst({ where: { userId: Number(userId) } }); // Assuming userId is User model ID
+      if (profile) consumerId = profile.id;
+      else {
+        // Maybe it WAS the consumerProfile ID?
+        const profileById = await prisma.consumerProfile.findUnique({ where: { id: Number(userId) } });
+        if (profileById) consumerId = profileById.id;
+      }
+    }
     // 2. If no userId, try to match by phone
     else if (phone) {
-        const user = await prisma.user.findFirst({ where: { phone } });
-        if (user) {
-            const profile = await prisma.consumerProfile.findUnique({ where: { userId: user.id } });
-            if (profile) consumerId = profile.id;
-        }
+      const user = await prisma.user.findFirst({ where: { phone } });
+      if (user) {
+        const profile = await prisma.consumerProfile.findUnique({ where: { userId: user.id } });
+        if (profile) consumerId = profile.id;
+      }
     }
 
     // CLIENT REQUIREMENT: Reject creation if not linked to valid existing customer
     if (!consumerId) {
-        return res.status(400).json({ error: 'NFC cards must be assigned only to an existing customer account.' });
+      return res.status(400).json({ error: 'NFC cards must be assigned only to an existing customer account.' });
     }
 
     const card = await prisma.nfcCard.create({
@@ -1930,16 +1930,16 @@ export const registerNFCCard = async (req: AuthRequest, res: Response) => {
 export const getNFCCardTransactions = async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
-    
+
     // Find the card and its linked consumer
-    const card = await prisma.nfcCard.findUnique({ 
-      where: { id: Number(id) } 
+    const card = await prisma.nfcCard.findUnique({
+      where: { id: Number(id) }
     });
-    
+
     if (!card) {
       return res.status(404).json({ success: false, error: 'Card not found' });
     }
-    
+
     if (!card.consumerId) {
       return res.json({ success: true, transactions: [] });
     }
@@ -2021,7 +2021,7 @@ export const unlinkNFCCard = async (req: AuthRequest, res: Response) => {
     const { id } = req.params;
     const card = await prisma.nfcCard.update({
       where: { id: Number(id) },
-      data: { 
+      data: {
         consumerId: null,
         retailerId: null,
         status: 'available' // Reset to available upon unlink
@@ -2108,10 +2108,10 @@ export const getRevenueReport = async (req: AuthRequest, res: Response) => {
 
     sales.forEach(s => {
       const date = new Date(s.createdAt);
-      let period = groupBy === 'month' 
+      let period = groupBy === 'month'
         ? `${date.getFullYear()}-${(date.getMonth() + 0).toString().padStart(2, '0')}` // Using 0 based or 1 based? Let's use 1 based to be consistent
         : date.toISOString().split('T')[0];
-      
+
       // Fix month calculation to be 1-based
       if (groupBy === 'month') {
         period = `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}`;
@@ -2126,7 +2126,7 @@ export const getRevenueReport = async (req: AuthRequest, res: Response) => {
 
     gasTopups.forEach(g => {
       const date = new Date(g.createdAt);
-      let period = groupBy === 'month' 
+      let period = groupBy === 'month'
         ? `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}`
         : date.toISOString().split('T')[0];
 
@@ -2183,7 +2183,7 @@ const saveCustomRates = (rates: any) => {
 export const getSystemConfig = async (req: AuthRequest, res: Response) => {
   try {
     let config = await prisma.systemConfig.findFirst();
-    
+
     // Create default config if it doesn't exist
     if (!config) {
       config = await prisma.systemConfig.create({
@@ -2204,7 +2204,7 @@ export const getSystemConfig = async (req: AuthRequest, res: Response) => {
         }
       });
     }
-    
+
     const rates = getCustomRates();
     res.json({ success: true, config: { ...config, ...rates } });
   } catch (error: any) {
@@ -3157,12 +3157,12 @@ export const getEmailLogs = async (req: AuthRequest, res: Response) => {
       prisma.systemEmailLog.count({ where })
     ]);
 
-    res.json({ 
-      success: true, 
-      logs, 
-      total, 
+    res.json({
+      success: true,
+      logs,
+      total,
       page: Number(page),
-      totalPages: Math.ceil(total / Number(limit)) 
+      totalPages: Math.ceil(total / Number(limit))
     });
   } catch (error: any) {
     res.status(500).json({ success: false, error: error.message });
