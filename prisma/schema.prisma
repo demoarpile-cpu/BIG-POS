@@ -821,6 +821,12 @@ model SystemConfig {
   maxWalletTopup      Float    @default(500000)
   maxDailyTransaction Float    @default(1000000)
   maxCreditLimit      Float    @default(500000)
+  
+  // Loan Interest Configuration
+  customerLoanInterest   Float @default(0)
+  retailerLoanInterest   Float @default(0)
+  wholesalerLoanInterest Float @default(0)
+
   updatedAt           DateTime @default(now()) @updatedAt
   createdAt           DateTime @default(now())
 

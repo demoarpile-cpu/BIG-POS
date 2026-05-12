@@ -615,20 +615,52 @@ export const getNFCCards = async (req: AuthRequest, res: Response) => {
   try {
     const cards = await prisma.nfcCard.findMany({
       include: {
-        consumerProfile: { include: { user: true } },
+        consumerProfile: { 
+          include: { 
+            user: true,
+            wallets: true 
+          } 
+        },
         retailerProfile: { include: { user: true } }
       }
     });
 
-    const formattedCards = cards.map(card => ({
-      id: card.id,
-      uid: card.uid,
-      status: card.status === 'available' ? 'active' : card.status,
-      balance: card.balance,
-      user_name: card.consumerProfile?.fullName || card.retailerProfile?.shopName || 'Unassigned',
-      user_type: card.consumerProfile ? 'consumer' : (card.retailerProfile ? 'retailer' : undefined),
-      created_at: card.createdAt,
-      last_used: card.updatedAt
+    const formattedCards = await Promise.all(cards.map(async (card) => {
+      const dashboardWallet = card.consumerProfile?.wallets.find(w => w.type === 'dashboard_wallet');
+      const creditWallet = card.consumerProfile?.wallets.find(w => w.type === 'credit_wallet');
+      
+      // Calculate actual transaction count from both Retail sales and Gas recharges
+      let transactionCount = 0;
+      if (card.consumerId) {
+        const [salesCount, gasCount] = await Promise.all([
+          prisma.sale.count({ where: { consumerId: card.consumerId, paymentMethod: 'nfc_card' } }),
+          prisma.gasRechargeTransaction.count({ where: { customerId: card.consumerId, paymentMethod: 'nfc_card' } })
+        ]);
+        transactionCount = salesCount + gasCount;
+      }
+
+      // Fallback cascading logic to find accurate user identification
+      const candidateName = card.consumerProfile?.fullName || 
+                           card.consumerProfile?.user?.name || 
+                           card.retailerProfile?.shopName || 
+                           card.retailerProfile?.user?.name || 
+                           card.cardholderName ||
+                           'Unassigned';
+
+      return {
+        id: card.id,
+        uid: card.uid,
+        status: card.status === 'available' ? 'active' : card.status,
+        balance: card.balance,
+        dashboardBalance: dashboardWallet?.balance || 0,
+        creditBalance: creditWallet?.balance || 0,
+        user_name: candidateName,
+        transaction_count: transactionCount,
+        user_type: card.consumerProfile ? 'consumer' : (card.retailerProfile ? 'retailer' : undefined),
+        created_at: card.createdAt,
+        last_used: card.updatedAt,
+        consumerProfile: card.consumerProfile
+      };
     }));
 
     res.json({ success: true, cards: formattedCards });
@@ -1687,11 +1719,11 @@ export const registerNFCCard = async (req: AuthRequest, res: Response) => {
 
     // Try to link to a consumer
     let consumerId = null;
-    let finalStatus = 'available';
+    let finalStatus = 'active';
 
     // 1. If userId provided explicitly
     if (userId) {
-        const profile = await prisma.consumerProfile.findFirst({ where: { userId: userId } }); // Assuming userId is User model ID
+        const profile = await prisma.consumerProfile.findFirst({ where: { userId: Number(userId) } }); // Assuming userId is User model ID
         if (profile) consumerId = profile.id;
         else {
             // Maybe it WAS the consumerProfile ID?
@@ -1708,8 +1740,9 @@ export const registerNFCCard = async (req: AuthRequest, res: Response) => {
         }
     }
 
-    if (consumerId) {
-        finalStatus = 'active';
+    // CLIENT REQUIREMENT: Reject creation if not linked to valid existing customer
+    if (!consumerId) {
+        return res.status(400).json({ error: 'NFC cards must be assigned only to an existing customer account.' });
     }
 
     const card = await prisma.nfcCard.create({
@@ -1733,9 +1766,72 @@ export const registerNFCCard = async (req: AuthRequest, res: Response) => {
       }
     });
 
-    res.status(201).json({ success: true, card, message: consumerId ? 'Card registered and linked to customer' : 'Card registered successfully' });
+    res.status(201).json({ success: true, card, message: 'Card registered and linked to customer' });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
+  }
+};
+
+export const getNFCCardTransactions = async (req: AuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    
+    // Find the card and its linked consumer
+    const card = await prisma.nfcCard.findUnique({ 
+      where: { id: Number(id) } 
+    });
+    
+    if (!card) {
+      return res.status(404).json({ success: false, error: 'Card not found' });
+    }
+    
+    if (!card.consumerId) {
+      return res.json({ success: true, transactions: [] });
+    }
+
+    // Fetch both regular retail sales and gas recharges performed by this consumer using NFC
+    const [sales, gasRecharges] = await Promise.all([
+      prisma.sale.findMany({
+        where: {
+          consumerId: card.consumerId,
+          paymentMethod: 'nfc_card'
+        },
+        orderBy: { createdAt: 'desc' },
+        take: 20
+      }),
+      prisma.gasRechargeTransaction.findMany({
+        where: {
+          customerId: card.consumerId,
+          paymentMethod: 'nfc_card'
+        },
+        orderBy: { createdAt: 'desc' },
+        take: 20
+      })
+    ]);
+
+    // Map both formats to a unified representation for display in the frontend table
+    const transactions = [
+      ...sales.map(s => ({
+        id: `SALE-${s.id}`,
+        type: 'Retail Purchase',
+        amount: s.totalAmount,
+        status: s.status,
+        date: s.createdAt,
+        details: s.meterId ? `Reference: ${s.meterId}` : 'Standard Purchase'
+      })),
+      ...gasRecharges.map(g => ({
+        id: `GAS-${g.id}`,
+        type: `Gas Recharge (${g.meterType})`,
+        amount: g.amount,
+        status: g.status,
+        date: g.createdAt,
+        details: `Meter: ${g.meterNumber}`
+      }))
+    ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+    res.json({ success: true, transactions });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: error.message });
   }
 };
 
@@ -1913,7 +2009,10 @@ export const getSystemConfig = async (req: AuthRequest, res: Response) => {
           minWalletTopup: 500,
           maxWalletTopup: 500000,
           maxDailyTransaction: 1000000,
-          maxCreditLimit: 500000
+          maxCreditLimit: 500000,
+          customerLoanInterest: 5.0,
+          retailerLoanInterest: 3.5,
+          wholesalerLoanInterest: 2.5
         }
       });
     }
@@ -2044,7 +2143,7 @@ export const getCustomerAccountDetails = async (req: AuthRequest, res: Response)
     const lastOrder = customer.sales.length > 0 ? customer.sales[0] : null;
 
     // Supplier chain - find linked retailers from sales
-    const linkedRetailers = [...new Set(customer.sales.map(s => s.retailerProfile?.id).filter(Boolean))];
+    const linkedRetailers = Array.from(new Set(customer.sales.map(s => s.retailerProfile?.id).filter(Boolean)));
     const supplierChain = await prisma.retailerProfile.findMany({
       where: { id: { in: linkedRetailers as number[] } },
       include: {

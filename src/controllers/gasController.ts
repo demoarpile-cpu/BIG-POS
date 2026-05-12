@@ -6,11 +6,16 @@ import PipingMeterService from '../services/pipingMeter.service';
 // Get gas configuration (price, etc)
 export const getGasConfig = async (req: AuthRequest, res: Response) => {
     try {
-        const gasPrice = Number(process.env.GAS_PRICE_PER_M3) || 1500;
+        // Fetch live config from DB, fallback to env/default if not found
+        const config = await prisma.systemConfig.findFirst();
+        const gasPrice = config?.gasPricePerM3 || Number(process.env.GAS_PRICE_PER_M3) || 1500;
+        
         res.json({
             success: true,
             data: {
-                price_per_m3: gasPrice
+                price_per_m3: gasPrice,
+                min_topup: config?.minGasTopup || 500,
+                max_topup: config?.maxGasTopup || 100000
             }
         });
     } catch (error: any) {
@@ -260,9 +265,10 @@ export const topupGas = async (req: AuthRequest, res: Response) => {
             return res.status(404).json({ success: false, error: 'Gas meter not found' });
         }
 
-        // Calculate units based on system-wide standard rate
-        const gasPrice = Number(process.env.GAS_PRICE_PER_M3) || 1500;
-        const units = amount / gasPrice;
+        // Calculate units based on system-wide dynamic rate from database
+        const config = await prisma.systemConfig.findFirst();
+        const gasPrice = config?.gasPricePerM3 || Number(process.env.GAS_PRICE_PER_M3) || 1500;
+        const units = Number((amount / gasPrice).toFixed(4)); // Ensure clean precision
 
         const result = await prisma.$transaction(async (tx) => {
             // Create topup record

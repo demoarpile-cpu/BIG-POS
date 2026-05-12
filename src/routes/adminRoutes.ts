@@ -38,6 +38,7 @@ import {
   blockNFCCard,
   activateNFCCard,
   unlinkNFCCard,
+  getNFCCardTransactions,
   getTransactionReport,
   getRevenueReport,
   getSystemConfig,
@@ -108,6 +109,7 @@ router.post('/nfc-cards', registerNFCCard);
 router.put('/nfc-cards/:id/block', blockNFCCard);
 router.put('/nfc-cards/:id/activate', activateNFCCard);
 router.put('/nfc-cards/:id/unlink', unlinkNFCCard);
+router.get('/nfc-cards/:id/transactions', getNFCCardTransactions);
 
 // Product Routes
 router.get('/products', getProducts);
