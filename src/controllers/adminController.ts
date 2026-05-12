@@ -2197,10 +2197,7 @@ export const getSystemConfig = async (req: AuthRequest, res: Response) => {
           minWalletTopup: 500,
           maxWalletTopup: 500000,
           maxDailyTransaction: 1000000,
-          maxCreditLimit: 500000,
-          customerLoanInterest: 5.0,
-          retailerLoanInterest: 3.5,
-          wholesalerLoanInterest: 2.5
+          maxCreditLimit: 500000
         }
       });
     }
