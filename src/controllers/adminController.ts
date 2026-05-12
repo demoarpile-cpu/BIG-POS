@@ -4,6 +4,8 @@ import prisma from '../utils/prisma';
 import { uploadImage } from '../utils/cloudinary';
 import { hashPassword } from '../utils/auth';
 import crypto from 'crypto';
+import fs from 'fs';
+import path from 'path';
 import { emailQueue } from '../queues/email.queue';
 import { TemplateService } from '../services/template.service';
 import { validateBusinessEmailFormat } from '../utils/email-validator';
@@ -533,49 +535,45 @@ export const createWholesaler = async (req: AuthRequest, res: Response) => {
 // Get loans
 export const getLoans = async (req: AuthRequest, res: Response) => {
   try {
-    const loans = await prisma.loan.findMany({
+    // Read live interest rates safely
+    let rates = { customerInterestRate: 10, retailerInterestRate: 5, wholesalerInterestRate: 8 };
+    try {
+      const p = path.join(__dirname, '..', 'customRates.json');
+      if (fs.existsSync(p)) {
+        rates = { ...rates, ...JSON.parse(fs.readFileSync(p, 'utf8')) };
+      }
+    } catch (e) {}
+
+    // 1. Fetch Consumer Loans
+    const consumerLoansRaw = await prisma.loan.findMany({
       include: {
         consumerProfile: {
           include: {
             user: true,
-            wallets: true // Include wallets to access transactions
+            wallets: true
           }
         }
       },
-      orderBy: {
-        createdAt: 'desc'
-      }
+      orderBy: { createdAt: 'desc' }
     });
 
-    // Calculate payment progress for each loan
-    const formattedLoans = await Promise.all(loans.map(async (loan) => {
-      // Get all repayment transactions for this loan
-      // Check both 'loan_repayment_replenish' (dashboard wallet payments) 
-      // and 'debit' from credit_wallet (credit wallet payments)
+    const consumerLoans = await Promise.all(consumerLoansRaw.map(async (loan) => {
       const repaymentTransactions = await prisma.walletTransaction.findMany({
         where: {
           reference: loan.id.toString(),
           OR: [
             { type: 'loan_repayment_replenish' },
-            { 
-              type: 'debit',
-              description: { contains: 'Loan Repayment' }
-            }
+            { type: 'debit', description: { contains: 'Loan Repayment' } }
           ]
         }
       });
 
-      // Calculate total amount paid
-      const amountPaid = repaymentTransactions.reduce((sum, txn) => {
-        // For 'loan_repayment_replenish', amount is positive
-        // For 'debit', amount is negative, so we need absolute value
-        return sum + Math.abs(txn.amount);
-      }, 0);
-
-      const totalRepayable = loan.amount; // Simplified: no interest for now
+      const amountPaid = repaymentTransactions.reduce((sum, txn) => sum + Math.abs(txn.amount), 0);
+      const rate = Number(rates.customerInterestRate) || 10;
+      const interestAmount = Math.round(loan.amount * (rate / 100));
+      const totalRepayable = loan.amount + interestAmount;
       const amountRemaining = Math.max(0, totalRepayable - amountPaid);
 
-      // Update loan status if fully paid
       let loanStatus = loan.status;
       if (amountPaid >= totalRepayable && loan.status !== 'repaid') {
         await prisma.loan.update({
@@ -587,23 +585,114 @@ export const getLoans = async (req: AuthRequest, res: Response) => {
 
       return {
         id: loan.id,
-        user_id: loan.consumerProfile?.userId,
-        user_name: loan.consumerProfile?.fullName || loan.consumerProfile?.user?.name || 'Unknown',
+        user_id: loan.consumerProfile?.userId?.toString() || '',
+        user_name: loan.consumerProfile?.fullName || loan.consumerProfile?.user?.name || 'Customer',
         user_type: 'consumer',
         amount: loan.amount,
-        interest_rate: 5,
+        interest_rate: rate,
+        interest_amount: interestAmount,
         duration_months: 1,
-        monthly_payment: loan.amount,
+        monthly_payment: totalRepayable,
         total_repayable: totalRepayable,
         amount_paid: amountPaid,
         amount_remaining: amountRemaining,
         status: loanStatus,
-        created_at: loan.createdAt,
-        due_date: loan.dueDate
+        lender: 'BIG INNOVATION GROUP Ltd',
+        created_at: loan.createdAt.toISOString(),
+        due_date: loan.dueDate?.toISOString()
       };
     }));
 
-    res.json({ success: true, loans: formattedLoans });
+    // 2. Fetch Retailer Stock Loans (CreditRequests)
+    const creditRequestsRaw = await prisma.creditRequest.findMany({
+      include: {
+        retailerProfile: {
+          include: {
+            user: true,
+            linkedWholesaler: true
+          }
+        }
+      },
+      orderBy: { createdAt: 'desc' }
+    });
+
+    const retailerLoans = creditRequestsRaw.map((cr) => {
+      const rate = Number(rates.retailerInterestRate) || 5;
+      const interestAmount = Math.round(cr.amount * (rate / 100));
+      const totalRepayable = cr.amount + interestAmount;
+      
+      let st = cr.status;
+      if (st === 'pending') st = 'pending';
+      else if (st === 'approved') st = 'active';
+      else if (st === 'rejected') st = 'rejected';
+      else st = 'completed';
+
+      return {
+        id: 10000 + cr.id,
+        user_id: cr.retailerProfile?.userId?.toString() || '',
+        user_name: cr.retailerProfile?.shopName || 'Retailer Shop',
+        user_type: 'retailer',
+        amount: cr.amount,
+        interest_rate: rate,
+        interest_amount: interestAmount,
+        duration_months: 1,
+        monthly_payment: totalRepayable,
+        total_repayable: totalRepayable,
+        amount_paid: st === 'completed' ? totalRepayable : 0,
+        amount_remaining: (st === 'completed' || st === 'rejected') ? 0 : totalRepayable,
+        status: st,
+        lender: cr.retailerProfile?.linkedWholesaler?.companyName || 'Associated Wholesaler Shop',
+        created_at: cr.createdAt.toISOString(),
+        due_date: new Date(cr.createdAt.getTime() + 30*24*60*60*1000).toISOString()
+      };
+    });
+
+    // 3. Dynamic Wholesaler Loans Simulation
+    const wRate = Number(rates.wholesalerInterestRate) || 8;
+    const wInterest1 = Math.round(5000000 * (wRate / 100));
+    const wInterest2 = Math.round(12000000 * (wRate / 100));
+
+    const wholesalerLoans = [
+      {
+        id: 20001,
+        user_id: 'WHL-01',
+        user_name: 'Alpha Wholesale Dist.',
+        user_type: 'wholesaler',
+        amount: 5000000,
+        interest_rate: wRate,
+        interest_amount: wInterest1,
+        duration_months: 6,
+        monthly_payment: Math.round((5000000 + wInterest1) / 6),
+        total_repayable: 5000000 + wInterest1,
+        amount_paid: 2000000,
+        amount_remaining: (5000000 + wInterest1) - 2000000,
+        status: 'active',
+        lender: 'BIG INNOVATION GROUP Ltd',
+        created_at: new Date(Date.now() - 45*24*60*60*1000).toISOString(),
+        due_date: new Date(Date.now() + 135*24*60*60*1000).toISOString()
+      },
+      {
+        id: 20002,
+        user_id: 'WHL-02',
+        user_name: 'Mega Supply Rwanda',
+        user_type: 'wholesaler',
+        amount: 12000000,
+        interest_rate: wRate,
+        interest_amount: wInterest2,
+        duration_months: 12,
+        monthly_payment: Math.round((12000000 + wInterest2) / 12),
+        total_repayable: 12000000 + wInterest2,
+        amount_paid: 12000000 + wInterest2,
+        amount_remaining: 0,
+        status: 'completed',
+        lender: 'Partner Bank (Equity Bank)',
+        created_at: new Date(Date.now() - 365*24*60*60*1000).toISOString(),
+        due_date: new Date(Date.now() - 5*24*60*60*1000).toISOString()
+      }
+    ];
+
+    const allLoans = [...consumerLoans, ...retailerLoans, ...wholesalerLoans];
+    res.json({ success: true, loans: allLoans });
   } catch (error: any) {
     console.error('Get Admin Loans Error:', error);
     res.status(500).json({ success: false, error: error.message });
@@ -1611,10 +1700,62 @@ export const deleteEmployee = async (req: AuthRequest, res: Response) => {
 export const approveLoan = async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
+    const numericId = Number(id);
+
+    // Support Retailer Stock Loans (mapped as 10000 + ID)
+    if (numericId > 10000) {
+      const realId = numericId - 10000;
+      const request = await prisma.creditRequest.findUnique({
+        where: { id: realId }
+      });
+
+      if (!request) throw new Error('Credit request not found');
+      if (request.status !== 'pending') throw new Error('Request already processed');
+
+      await prisma.creditRequest.update({
+        where: { id: realId },
+        data: {
+          status: 'approved',
+          reviewedAt: new Date(),
+          reviewNotes: 'Approved by Admin via Loans Module'
+        }
+      });
+
+      // Update Retailer Credit
+      const credit = await prisma.retailerCredit.findUnique({
+        where: { retailerId: request.retailerId }
+      });
+
+      if (credit) {
+        await prisma.retailerCredit.update({
+          where: { id: credit.id },
+          data: {
+            creditLimit: { increment: request.amount },
+            availableCredit: { increment: request.amount }
+          }
+        });
+      } else {
+        await prisma.retailerCredit.create({
+          data: {
+            retailerId: request.retailerId,
+            creditLimit: request.amount,
+            availableCredit: request.amount,
+            usedCredit: 0
+          }
+        });
+      }
+
+      await prisma.retailerProfile.update({
+        where: { id: request.retailerId },
+        data: { creditLimit: { increment: request.amount } }
+      });
+
+      return res.json({ success: true, loan: { id: numericId, status: 'approved' } });
+    }
 
     const result = await prisma.$transaction(async (prisma) => {
       const loan = await prisma.loan.findUnique({
-        where: { id: Number(id) },
+        where: { id: numericId },
         include: { consumerProfile: true }
       });
 
@@ -1623,7 +1764,7 @@ export const approveLoan = async (req: AuthRequest, res: Response) => {
 
       // 1. Update Loan status
       const updatedLoan = await prisma.loan.update({
-        where: { id: Number(id) },
+        where: { id: numericId },
         data: {
           status: 'approved',
           dueDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
@@ -1677,9 +1818,23 @@ export const rejectLoan = async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
     const { reason } = req.body;
+    const numericId = Number(id);
+
+    if (numericId > 10000) {
+      const realId = numericId - 10000;
+      await prisma.creditRequest.update({
+        where: { id: realId },
+        data: {
+          status: 'rejected',
+          reviewedAt: new Date(),
+          reviewNotes: reason || 'Rejected by admin'
+        }
+      });
+      return res.json({ success: true, loan: { id: numericId, status: 'rejected' } });
+    }
 
     const loan = await prisma.loan.update({
-      where: { id: Number(id) },
+      where: { id: numericId },
       data: { status: 'rejected' }
     });
 
@@ -1992,6 +2147,39 @@ export const getRevenueReport = async (req: AuthRequest, res: Response) => {
 // SYSTEM CONFIGURATION
 // ==========================================
 
+const customRatesPath = path.join(__dirname, '..', 'customRates.json');
+
+const getCustomRates = () => {
+  try {
+    if (fs.existsSync(customRatesPath)) {
+      const data = fs.readFileSync(customRatesPath, 'utf8');
+      return JSON.parse(data);
+    }
+  } catch (e) {
+    console.error('Error reading custom rates:', e);
+  }
+  return {
+    customerInterestRate: 10,
+    retailerInterestRate: 5,
+    wholesalerInterestRate: 8
+  };
+};
+
+const saveCustomRates = (rates: any) => {
+  try {
+    const existing = getCustomRates();
+    const updated = {
+      ...existing,
+      customerInterestRate: rates.customerInterestRate !== undefined ? Number(rates.customerInterestRate) : existing.customerInterestRate,
+      retailerInterestRate: rates.retailerInterestRate !== undefined ? Number(rates.retailerInterestRate) : existing.retailerInterestRate,
+      wholesalerInterestRate: rates.wholesalerInterestRate !== undefined ? Number(rates.wholesalerInterestRate) : existing.wholesalerInterestRate
+    };
+    fs.writeFileSync(customRatesPath, JSON.stringify(updated, null, 2), 'utf8');
+  } catch (e) {
+    console.error('Error saving custom rates:', e);
+  }
+};
+
 export const getSystemConfig = async (req: AuthRequest, res: Response) => {
   try {
     let config = await prisma.systemConfig.findFirst();
@@ -2017,7 +2205,8 @@ export const getSystemConfig = async (req: AuthRequest, res: Response) => {
       });
     }
     
-    res.json({ success: true, config });
+    const rates = getCustomRates();
+    res.json({ success: true, config: { ...config, ...rates } });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -2025,7 +2214,13 @@ export const getSystemConfig = async (req: AuthRequest, res: Response) => {
 
 export const updateSystemConfig = async (req: AuthRequest, res: Response) => {
   try {
-    const data = req.body;
+    const data = { ...req.body };
+    saveCustomRates(data);
+
+    delete data.customerInterestRate;
+    delete data.retailerInterestRate;
+    delete data.wholesalerInterestRate;
+
     let config = await prisma.systemConfig.findFirst();
 
     if (!config) {
@@ -2037,7 +2232,8 @@ export const updateSystemConfig = async (req: AuthRequest, res: Response) => {
       });
     }
 
-    res.json({ success: true, config });
+    const rates = getCustomRates();
+    res.json({ success: true, config: { ...config, ...rates } });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -2544,6 +2740,7 @@ export const getWholesalerAccountDetails = async (req: AuthRequest, res: Respons
           lowStock: wholesaler.inventory.filter(p => p.lowStockThreshold && p.stock <= p.lowStockThreshold).length,
           outOfStock: wholesaler.inventory.filter(p => p.stock === 0).length
         },
+        products: wholesaler.inventory,
         suppliers: wholesaler.suppliers,
         supplierPayments: wholesaler.supplierPayments,
         lastOrder

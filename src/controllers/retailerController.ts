@@ -1664,13 +1664,26 @@ export const getCreditInfo = async (req: AuthRequest, res: Response) => {
       });
     }
 
+    const creditRequests = await prisma.creditRequest.findMany({
+      where: { retailerId: retailerProfile.id },
+      orderBy: { createdAt: 'desc' }
+    });
+
     res.json({
       credit: {
         credit_limit: retailerCredit.creditLimit,
         credit_used: retailerCredit.usedCredit,
         credit_available: retailerCredit.availableCredit,
         credit_score: 75, // Static for now, logic can be added later
-      }
+      },
+      requests: creditRequests.map(r => ({
+        id: r.id,
+        amount: r.amount,
+        reason: r.reason,
+        status: r.status,
+        reviewNotes: r.reviewNotes,
+        created_at: r.createdAt.toISOString()
+      }))
     });
 
   } catch (error: any) {
