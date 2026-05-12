@@ -730,7 +730,7 @@ export const getMyOrders = async (req: AuthRequest, res: Response) => {
           id: 'GAS_SERVICE',
           name: 'Big Gas Service',
           location: 'Main Depot',
-          phone: '+250 788 000 000'
+          phone: '+250788541239'
         },
         items: items.map((i: any, idx: number) => ({
           id: `${order.id}-${idx}`,
