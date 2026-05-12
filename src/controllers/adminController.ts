@@ -255,6 +255,7 @@ export const getCustomers = async (req: AuthRequest, res: Response) => {
     const customers = await prisma.consumerProfile.findMany({
       include: { 
         user: true,
+        wallets: true,
         sales: {
           select: {
             totalAmount: true
@@ -274,7 +275,8 @@ export const getCustomers = async (req: AuthRequest, res: Response) => {
     const formattedCustomers = customers.map(customer => {
       const orderCount = customer.sales.length;
       const totalSpent = customer.sales.reduce((sum, sale) => sum + sale.totalAmount, 0);
-      const gasBalance = customer.gasTopups.reduce((sum, topup) => sum + topup.units, 0).toFixed(2) + " M³";
+      const gasRewardWalletBalance = customer.wallets.find(w => w.type === 'gas_rewards_wallet')?.balance || 0;
+      const gasBalance = gasRewardWalletBalance.toFixed(2) + " M³";
       
       return {
         ...customer,
@@ -644,7 +646,24 @@ export const getCategories = async (req: AuthRequest, res: Response) => {
     const categories = await prisma.category.findMany({
       orderBy: { name: 'asc' }
     });
-    res.json({ success: true, categories });
+
+    // Manually count products for each category to be Railway-safe without schema migrations
+    const categoriesWithCount = await Promise.all(
+      categories.map(async (cat) => {
+        const productCount = await prisma.product.count({
+          where: { 
+            category: cat.name,
+            status: 'active'
+          }
+        });
+        return {
+          ...cat,
+          productCount
+        };
+      })
+    );
+
+    res.json({ success: true, categories: categoriesWithCount });
   } catch (error: any) {
     console.error('Get Categories Error:', error);
     res.status(500).json({ success: false, message: error.message });
@@ -1170,10 +1189,10 @@ export const deleteCustomer = async (req: AuthRequest, res: Response) => {
   }
 };
 
-// Get all products
+// Get all products (Aggregated by SKU/Name for total stock)
 export const getProducts = async (req: AuthRequest, res: Response) => {
   try {
-    const products = await prisma.product.findMany({
+    const rawProducts = await prisma.product.findMany({
       include: {
         retailerProfile: {
           select: { shopName: true }
@@ -1184,6 +1203,24 @@ export const getProducts = async (req: AuthRequest, res: Response) => {
       },
       orderBy: { createdAt: 'desc' }
     });
+
+    // Aggregate by SKU (fallback to name if sku is missing)
+    const groupedMap = new Map();
+
+    rawProducts.forEach(product => {
+      const key = product.sku || product.name;
+      if (!groupedMap.has(key)) {
+        // Deep copy to avoid mutating the original fetched object
+        groupedMap.set(key, { ...product });
+      } else {
+        const existing = groupedMap.get(key);
+        // Aggregate stock
+        existing.stock += product.stock;
+      }
+    });
+
+    const products = Array.from(groupedMap.values());
+
     res.json({ products });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -1245,7 +1282,7 @@ export const createProduct = async (req: AuthRequest, res: Response) => {
   }
 };
 
-// Update product
+// Update product (Updates ALL products with the same SKU/Name to enforce Tariff)
 export const updateProduct = async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
@@ -1257,7 +1294,6 @@ export const updateProduct = async (req: AuthRequest, res: Response) => {
       price,
       costPrice,
       retailerPrice,
-      stock,
       unit,
       lowStockThreshold,
       invoiceNumber,
@@ -1266,14 +1302,22 @@ export const updateProduct = async (req: AuthRequest, res: Response) => {
       image
     } = req.body;
 
+    const targetProduct = await prisma.product.findUnique({ where: { id: Number(id) } });
+    if (!targetProduct) {
+      return res.status(404).json({ error: 'Product not found' });
+    }
+
+    const whereClause = targetProduct.sku ? { sku: targetProduct.sku } : { name: targetProduct.name };
+
     // Upload to Cloudinary if new image is provided as base64
     let imageUrl = image;
     if (image && image.startsWith('data:image')) {
       imageUrl = await uploadImage(image);
     }
 
-    const product = await prisma.product.update({
-      where: { id: Number(id) },
+    // Update ALL products with this SKU/Name to apply the tariff universally
+    await prisma.product.updateMany({
+      where: whereClause,
       data: {
         name,
         description,
@@ -1282,16 +1326,17 @@ export const updateProduct = async (req: AuthRequest, res: Response) => {
         price: price ? parseFloat(price) : undefined,
         costPrice: costPrice !== undefined ? (costPrice ? parseFloat(costPrice) : null) : undefined,
         retailerPrice: retailerPrice !== undefined ? (retailerPrice ? parseFloat(retailerPrice) : null) : undefined,
-        stock: stock !== undefined ? parseInt(stock) : undefined,
+        // Note: stock is NOT updated here because it's managed individually by wholesalers
         unit,
         lowStockThreshold: lowStockThreshold !== undefined ? (lowStockThreshold ? parseInt(lowStockThreshold) : null) : undefined,
         invoiceNumber,
         barcode,
         status,
-        image: imageUrl
+        ...(imageUrl ? { image: imageUrl } : {})
       }
     });
 
+    const product = await prisma.product.findUnique({ where: { id: Number(id) } });
     res.json({ success: true, product });
   } catch (error: any) {
     console.error('Update Product Error:', error);
@@ -1299,12 +1344,19 @@ export const updateProduct = async (req: AuthRequest, res: Response) => {
   }
 };
 
-// Delete product
+// Delete product (Deletes ALL products with the same SKU/Name)
 export const deleteProduct = async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
-    await prisma.product.delete({ where: { id: Number(id) } });
-    res.json({ success: true, message: 'Product deleted successfully' });
+    const targetProduct = await prisma.product.findUnique({ where: { id: Number(id) } });
+    if (!targetProduct) {
+      return res.status(404).json({ error: 'Product not found' });
+    }
+
+    const whereClause = targetProduct.sku ? { sku: targetProduct.sku } : { name: targetProduct.name };
+
+    await prisma.product.deleteMany({ where: whereClause });
+    res.json({ success: true, message: 'Products deleted successfully' });
   } catch (error: any) {
     console.error('Delete Product Error:', error);
     res.status(500).json({ error: error.message });
@@ -1959,7 +2011,8 @@ export const getCustomerAccountDetails = async (req: AuthRequest, res: Response)
       dashboardWallet: customer.wallets.find(w => w.type === 'dashboard_wallet')?.balance || 0,
       rewardsWallet: customer.wallets.find(w => w.type === 'rewards_wallet')?.balance || 0,
       gasRewardsWallet: customer.wallets.find(w => w.type === 'gas_rewards_wallet')?.balance || 0,
-      creditWallet: customer.wallets.find(w => w.type === 'credit_wallet')?.balance || 0
+      creditWallet: customer.wallets.find(w => w.type === 'credit_wallet')?.balance || 0,
+      gasBalance: customer.gasMeters.reduce((sum, m) => sum + (m.currentUnits || 0), 0)
     };
 
     // Order statistics
@@ -2171,6 +2224,7 @@ export const getRetailerAccountDetails = async (req: AuthRequest, res: Response)
           lowStock: retailer.inventory.filter(p => p.lowStockThreshold && p.stock <= p.lowStockThreshold).length,
           outOfStock: retailer.inventory.filter(p => p.stock === 0).length
         },
+        products: retailer.inventory,
         creditRequests: retailer.creditRequests,
         lastOrder,
         linkedWholesaler: retailer.linkedWholesaler ? {

@@ -298,27 +298,15 @@ export const getInventoryStats = async (req: AuthRequest, res: Response) => {
   }
 };
 
-// Get categories
+// Get categories (from global Category table for Add/Edit forms)
 export const getCategories = async (req: AuthRequest, res: Response) => {
   try {
-    const wholesalerProfile = await prisma.wholesalerProfile.findUnique({
-      where: { userId: req.user!.id }
+    const categories = await prisma.category.findMany({
+      where: { isActive: true },
+      orderBy: { name: 'asc' }
     });
 
-    if (!wholesalerProfile) {
-      return res.status(404).json({ error: 'Wholesaler profile not found' });
-    }
-
-    // Get unique categories from products
-    const products = await prisma.product.findMany({
-      where: { wholesalerId: wholesalerProfile.id },
-      select: { category: true },
-      distinct: ['category']
-    });
-
-    const categories = products.map(p => p.category).filter(Boolean);
-
-    res.json({ categories });
+    res.json({ categories: categories.map(c => c.name) });
   } catch (error: any) {
     console.error('❌ Error fetching categories:', error);
     res.status(500).json({ error: error.message });

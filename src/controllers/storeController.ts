@@ -843,12 +843,23 @@ export const confirmDelivery = async (req: AuthRequest, res: Response) => {
       });
     }
 
-    await prisma.sale.update({
+    const updatedSale = await prisma.sale.update({
       where: { id: Number(id) },
-      data: { status: 'delivered' }
+      data: { status: 'delivered' },
+      include: { saleItems: true }
     });
 
-    res.json({ success: true, message: 'Delivery confirmed' });
+    // Reduce retailer inventory upon delivery confirmation
+    for (const item of updatedSale.saleItems) {
+      if (item.productId) {
+        await prisma.product.updateMany({
+          where: { id: item.productId, stock: { gt: 0 } },
+          data: { stock: { decrement: item.quantity } }
+        });
+      }
+    }
+
+    res.json({ success: true, message: 'Delivery confirmed and inventory reduced' });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
